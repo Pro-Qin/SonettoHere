@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /c/Users/Miso/PycharmProjects/Agent/)",
+      "Read(//c/Users/Miso/PycharmProjects/Agent//**)",
+      "Read(//c/Users/Miso/PycharmProjects/Agent/**)",
+      "Bash(cp /c/Users/Miso/PycharmProjects/Agent/Modules/AGENTS.md /c/Users/Miso/PycharmProjects/SonettoHere/config/personas/AGENTS.md)",
+      "Bash(cp /c/Users/Miso/PycharmProjects/Agent/Modules/SOUL.md /c/Users/Miso/PycharmProjects/SonettoHere/config/personas/SOUL.md)",
+      "Bash(cp /c/Users/Miso/PycharmProjects/Agent/Modules/MEMORY.md /c/Users/Miso/PycharmProjects/SonettoHere/config/personas/MEMORY.md)",
+      "Bash(cp /c/Users/Miso/PycharmProjects/Agent/extracted/extracted_history.json /c/Users/Miso/PycharmProjects/SonettoHere/extracted/extracted_history.json)",
+      "Bash(cp /c/Users/Miso/PycharmProjects/Agent/extracted/user_preference_profile.json /c/Users/Miso/PycharmProjects/SonettoHere/extracted/user_preference_profile.json)",
+      "Bash(pip show *)",
+      "Bash(pip list *)",
+      "Bash(\"C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\Agent\\\\.venv\\\\Scripts\\\\pip.exe\" show *)",
+      "Bash(\"C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\Agent\\\\.venv\\\\Scripts\\\\python.exe\" -c \"import uapi; print\\(uapi.__file__, uapi.__version__ if hasattr\\(uapi, '__version__'\\) else ''\\)\")",
+      "Bash(\"C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\SonettoHere\\\\.venv\\\\Scripts\\\\pip.exe\" uninstall *)",
+      "Bash(\"C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\SonettoHere\\\\.venv\\\\Scripts\\\\python.exe\" -c \"import sys; sys.path.insert\\(0, r'C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\SonettoHere'\\); from uapi import UapiClient; u = UapiClient\\('https://uapis.cn', token='test'\\); print\\('OK:', type\\(u.misc\\), type\\(u.answerbook\\), type\\(u.zhi_neng_sou_suo\\)\\)\")",
+      "Bash(\"C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\SonettoHere\\\\.venv\\\\Scripts\\\\python.exe\" -c \"from skills.base import SharedAPIClient; c = SharedAPIClient\\(\\); print\\('uapi:', type\\(c.uapi\\)\\); print\\('amap_key:', c.amap_key[:4] + '****' if c.amap_key else 'NOT SET'\\)\")",
+      "Bash(\"C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\SonettoHere\\\\.venv\\\\Scripts\\\\python.exe\" -c \"from skills.base import SharedAPIClient; c = SharedAPIClient\\(\\); print\\('uapi:', type\\(c.uapi\\)\\); print\\('amap_key:', c.amap_key[:4] + '****'\\); print\\('OK'\\)\")",
+      "Bash(\"C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\SonettoHere\\\\.venv\\\\Scripts\\\\python.exe\" -c \"from clients.cli import main; print\\('CLI import OK'\\)\")",
+      "Bash(\"C:\\\\Users\\\\Miso\\\\PycharmProjects\\\\SonettoHere\\\\.venv\\\\Scripts\\\\python.exe\" -c \"from clients.cli import main; print\\('OK'\\)\")"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+"""系统提示词组装（启动时读盘一次，缓存）。"""
+
+from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
+
+PERSONAS_DIR = Path(__file__).resolve().parent.parent / "config" / "personas"
+
+
+@lru_cache(maxsize=3)
+def _read_persona(filename: str) -> str:
+    path = PERSONAS_DIR / filename
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return ""
+
+
+def build_system_prompt() -> str:
+    """组装完整系统提示词，启动时调用一次即可。"""
+    now = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
+    parts = [
+        f"当前时间：{now}",
+        "",
+        "## 行为规则",
+        _read_persona("AGENTS.md"),
+        "",
+        "## 性格设定",
+        _read_persona("SOUL.md"),
+        "",
+        "## 固定记忆",
+        _read_persona("MEMORY.md"),
+    ]
+    return "\n".join(parts)
