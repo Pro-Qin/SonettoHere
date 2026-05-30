@@ -16,7 +16,9 @@ export function Composer({
   running: boolean;
   plan: boolean;
   onSend: (text: string) => void;
-  onCancel: () => void;
+  // Returns the un-sent text when cancelling before the server replied (so it can
+  // be restored to the input); undefined for a normal cancel.
+  onCancel: () => string | undefined;
   onTogglePlan: () => void;
 }) {
   const [text, setText] = useState("");
@@ -115,6 +117,13 @@ export function Composer({
     setText("");
   };
 
+  // handleCancel stops the in-flight turn; if it was cancelled before the server
+  // replied, the just-sent text is handed back so we drop it back into the input.
+  const handleCancel = () => {
+    const restored = onCancel();
+    if (typeof restored === "string") setTextCaretEnd(restored);
+  };
+
   const pickCommand = (c: CommandInfo) => setTextCaretEnd("/" + c.name + " ");
 
   const pickEntry = (e: DirEntry) => {
@@ -168,10 +177,11 @@ export function Composer({
       e.preventDefault();
       submit();
     }
-    // Esc interrupts the in-flight turn (matches the Stop button's hint).
+    // Esc interrupts the in-flight turn (matches the Stop button's hint), and
+    // restores the text if the server hadn't replied yet.
     if (e.key === "Escape" && running) {
       e.preventDefault();
-      onCancel();
+      handleCancel();
     }
   };
 
@@ -206,7 +216,7 @@ export function Composer({
           rows={1}
         />
         {running ? (
-          <button className="composer__btn composer__btn--stop" onClick={onCancel} title="Stop (Esc)">
+          <button className="composer__btn composer__btn--stop" onClick={handleCancel} title="Stop (Esc)">
             <Square size={14} fill="currentColor" />
           </button>
         ) : (

@@ -20,11 +20,13 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/command"
+	"reasonix/internal/config"
 	"reasonix/internal/event"
 	"reasonix/internal/memory"
 	"reasonix/internal/permission"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
+	"reasonix/internal/tool"
 )
 
 // Controller drives one chat session. Construct with New; drive with the command
@@ -42,6 +44,13 @@ type Controller struct {
 	commands     []command.Command
 	mem          *memory.Set
 	cleanup      func()
+
+	// reg is the live tool registry the executor reads each turn; pluginCtx is the
+	// session-scoped context a hot-added stdio server binds its subprocess to.
+	// Together they let AddMCPServer connect a server mid-session and have its tools
+	// available on the next turn (see AddMCPServer / RemoveMCPServer).
+	reg       *tool.Registry
+	pluginCtx context.Context
 
 	// promptMu serialises approval prompts so at most one is outstanding at a
 	// time (parallel read-only tool calls don't normally gate, writers run
@@ -96,6 +105,10 @@ type Options struct {
 	Commands     []command.Command
 	Memory       *memory.Set
 	Cleanup      func()
+	// Registry is the executor's live tool set, and PluginCtx the session-scoped
+	// context; both are needed for hot-adding MCP servers via AddMCPServer.
+	Registry  *tool.Registry
+	PluginCtx context.Context
 }
 
 // New builds a Controller. A nil Sink is replaced with event.Discard.
@@ -103,6 +116,10 @@ func New(opts Options) *Controller {
 	sink := opts.Sink
 	if sink == nil {
 		sink = event.Discard
+	}
+	pluginCtx := opts.PluginCtx
+	if pluginCtx == nil {
+		pluginCtx = context.Background()
 	}
 	return &Controller{
 		runner:       opts.Runner,
@@ -117,6 +134,8 @@ func New(opts Options) *Controller {
 		commands:     opts.Commands,
 		mem:          opts.Memory,
 		cleanup:      opts.Cleanup,
+		reg:          opts.Registry,
+		pluginCtx:    pluginCtx,
 		approvals:    map[string]chan approvalReply{},
 		asks:         map[string]chan []event.AskAnswer{},
 		granted:      map[string]bool{},
@@ -498,6 +517,77 @@ func (c *Controller) Host() *plugin.Host { return c.host }
 
 // Commands returns the loaded custom slash commands.
 func (c *Controller) Commands() []command.Command { return c.commands }
+
+// AddMCPServer connects an MCP server live and persists it to the config file. Its
+// tools are registered immediately and become available on the next turn (the
+// agent reads the registry per turn). The raw entry — ${VARS} intact — is what's
+// written to disk; the live connection uses the expanded form. Returns the number
+// of tools the server exposed. A save failure after a successful connect is
+// reported but non-fatal: the server still works this session.
+func (c *Controller) AddMCPServer(e config.PluginEntry) (int, error) {
+	if c.host == nil {
+		c.host = plugin.NewHost()
+	}
+	exp := e.ExpandedPlugin()
+	tools, err := c.host.Add(c.pluginCtx, plugin.Spec{
+		Name:    exp.Name,
+		Type:    exp.Type,
+		Command: exp.Command,
+		Args:    exp.Args,
+		Env:     exp.Env,
+		URL:     exp.URL,
+		Headers: exp.Headers,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if c.reg != nil {
+		for _, t := range tools {
+			c.reg.Add(t)
+		}
+	}
+	cfg, lerr := config.Load()
+	if lerr != nil {
+		return len(tools), fmt.Errorf("connected, but reloading config to save failed: %w", lerr)
+	}
+	if err := cfg.UpsertPlugin(e); err != nil {
+		return len(tools), fmt.Errorf("connected, but config rejected the entry: %w", err)
+	}
+	if err := cfg.Save(); err != nil {
+		return len(tools), fmt.Errorf("connected, but saving config failed: %w", err)
+	}
+	return len(tools), nil
+}
+
+// RemoveMCPServer disconnects a live MCP server — its tools vanish from the next
+// turn — and removes it from the config file. It reports whether a live server was
+// disconnected; an error only when the name is neither connected nor in config (or
+// the config save fails). A server declared in .mcp.json disconnects for this
+// session but returns on the next start, since that file isn't ours to edit.
+func (c *Controller) RemoveMCPServer(name string) (disconnected bool, err error) {
+	if c.host != nil {
+		if prefix, ok := c.host.Remove(name); ok {
+			disconnected = true
+			if c.reg != nil {
+				c.reg.RemovePrefix(prefix)
+			}
+		}
+	}
+	cfg, lerr := config.Load()
+	if lerr != nil {
+		return disconnected, lerr
+	}
+	inConfig := cfg.RemovePlugin(name)
+	if inConfig {
+		if serr := cfg.Save(); serr != nil {
+			return disconnected, serr
+		}
+	}
+	if !disconnected && !inConfig {
+		return false, fmt.Errorf("no MCP server named %q", name)
+	}
+	return disconnected, nil
+}
 
 // Label returns the human-readable model label, e.g. "deepseek-flash".
 func (c *Controller) Label() string { return c.label }

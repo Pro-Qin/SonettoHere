@@ -51,6 +51,59 @@ func TestIngestEventRoutesByKind(t *testing.T) {
 	}
 }
 
+// TestDeferredUserBubble proves the user bubble is held back until the server's
+// first real packet: a local TurnStarted must not commit it (that would shrink
+// the un-send window to nothing), while the first Reasoning/Text/etc. flushes it
+// — a blank separator then the bubble — just before rendering that packet.
+func TestDeferredUserBubble(t *testing.T) {
+	m := newTestChatTUI()
+	// Stand in for startTurn's deferral (no controller in the unit harness).
+	m.pendingBubble = "hello world"
+	m.bubblePending = true
+	m.state = tuiRunning
+
+	// TurnStarted is emitted locally before the request — it must not flush.
+	m.ingestEvent(event.Event{Kind: event.TurnStarted})
+	if !m.bubblePending || len(*m.pendingCommit) != 0 {
+		t.Fatalf("TurnStarted should not commit the deferred bubble, pending=%v committed=%v", m.bubblePending, *m.pendingCommit)
+	}
+
+	// The first real packet commits the bubble (blank + bubble) ahead of itself.
+	m.ingestEvent(event.Event{Kind: event.Reasoning, Text: "thinking…"})
+	if m.bubblePending {
+		t.Fatalf("first packet should commit the deferred bubble")
+	}
+	if n := len(*m.pendingCommit); n != 2 {
+		t.Fatalf("expected a blank separator + the bubble, got %d: %v", n, *m.pendingCommit)
+	}
+	if !strings.Contains((*m.pendingCommit)[1], "hello world") {
+		t.Errorf("committed bubble should carry the user text, got %q", (*m.pendingCommit)[1])
+	}
+}
+
+// TestUnsendDiscardsBufferedEvents proves that after an un-send (Esc before any
+// packet) the turn's already-buffered events are swallowed — nothing reaches
+// scrollback — and its TurnDone settles the model back to idle.
+func TestUnsendDiscardsBufferedEvents(t *testing.T) {
+	m := newTestChatTUI()
+	m.state = tuiRunning
+	m.turnDiscarded = true // the state unsendPending leaves behind
+
+	m.ingestEvent(event.Event{Kind: event.Reasoning, Text: "late thinking"})
+	m.ingestEvent(event.Event{Kind: event.Text, Text: "late answer"})
+	if len(*m.pendingCommit) != 0 || m.reasoning.Len() != 0 || m.pending.Len() != 0 {
+		t.Fatalf("a discarded turn should swallow buffered events, committed=%v", *m.pendingCommit)
+	}
+
+	m.ingestEvent(event.Event{Kind: event.TurnDone})
+	if m.turnDiscarded || m.state != tuiIdle {
+		t.Fatalf("TurnDone should clear the discard and return to idle, discarded=%v state=%v", m.turnDiscarded, m.state)
+	}
+	if len(*m.pendingCommit) != 0 {
+		t.Errorf("a discarded turn should leave nothing in scrollback, committed=%v", *m.pendingCommit)
+	}
+}
+
 // TestAnswerTextStartingWithBracketStaysInAnswer locks in the win of the typed
 // event stream: model answer text starting with "[" — a markdown link, a slice
 // literal, even a quoted "[… · planning]" — is a Text event, so it can never be

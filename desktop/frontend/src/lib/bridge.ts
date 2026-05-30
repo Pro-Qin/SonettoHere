@@ -125,6 +125,11 @@ function makeMockApp(): AppBindings {
     async Submit(input) {
       cancelled = false;
       emit({ kind: "turn_started" });
+      // Simulate the server's pre-first-token latency so the deferred user bubble
+      // and the "un-send on Esc before any reply" path are observable in browser
+      // dev. Bail if cancelled during the wait — nothing was streamed yet.
+      await delay(700);
+      if (cancelled) return;
       const reply =
         `You said: **${input}**\n\n` +
         "This is the browser dev mock — the real reply comes from the kernel " +

@@ -80,6 +80,7 @@ Usage:
   reasonix run  [--model NAME] [--max-steps N] <task>   run one task and exit
   reasonix serve [--model NAME] [--addr HOST:PORT]      serve the session over HTTP+SSE (browser client at /)
   reasonix init [path]                                  interactive setup; writes reasonix.toml (+ .env)
+  reasonix mcp <add|remove|list>                        manage MCP servers in reasonix.toml
   reasonix version
   reasonix help
 

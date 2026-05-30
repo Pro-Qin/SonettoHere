@@ -80,6 +80,17 @@ type chatTUI struct {
 	eventCh       chan event.Event
 	started       bool // banner + resumed history committed once
 
+	// The user bubble for an in-flight turn is deferred, not echoed on Enter: it's
+	// held in pendingBubble and committed to scrollback only when the first
+	// response packet arrives (commitPendingBubble). Pressing Esc/Ctrl+C before
+	// then "un-sends" the message — its text returns to the input box and nothing
+	// reaches scrollback. bubblePending is true from startTurn until the bubble
+	// commits or is un-sent; turnDiscarded then swallows the turn's already-buffered
+	// events until its TurnDone settles.
+	pendingBubble string
+	bubblePending bool
+	turnDiscarded bool
+
 	// pendingApproval holds the tool-call approval currently shown in the banner
 	// (nil when none). While set, the controller's run goroutine is blocked
 	// awaiting ctrl.Approve and key input is captured to answer it.
@@ -271,10 +282,13 @@ func (m chatTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "esc":
-			// "Back out" of the most specific in-progress state: cancel a turn,
-			// turn plan mode off, or clear typed-but-unsent input. Scrollback is
-			// the terminal's now, so there's no viewport to dismiss.
+			// "Back out" of the most specific in-progress state: un-send a just-sent
+			// turn (server not yet replied), cancel a streaming turn, turn plan mode
+			// off, or clear typed-but-unsent input. Scrollback is the terminal's now,
+			// so there's no viewport to dismiss.
 			switch {
+			case m.state == tuiRunning && m.bubblePending:
+				m.unsendPending()
 			case m.state == tuiRunning:
 				m.ctrl.Cancel()
 			case m.planMode:
@@ -286,7 +300,11 @@ func (m chatTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+c":
 			if m.state == tuiRunning {
-				m.ctrl.Cancel()
+				if m.bubblePending {
+					m.unsendPending() // server not yet replied — restore text, leave no trace
+				} else {
+					m.ctrl.Cancel()
+				}
 				return m, nil
 			}
 			return m, tea.Quit
@@ -825,8 +843,13 @@ func (m *chatTUI) startTurn(sent, displayed string) tea.Cmd {
 	// Flush any half-streamed leftover before the new turn (defensive).
 	m.commitReasoning()
 	m.commitPending()
-	m.commitLine("") // blank line separating turns
-	m.commitLine(renderUserBubble(displayed, m.width, m.planMode))
+
+	// Defer the user bubble until the first response packet (commitPendingBubble):
+	// pressing Esc before the server replies un-sends the message, restoring its
+	// text to the input box with nothing stranded in scrollback.
+	m.pendingBubble = displayed
+	m.bubblePending = true
+	m.turnDiscarded = false
 
 	m.state = tuiRunning
 	m.runStart = time.Now()
@@ -838,12 +861,55 @@ func (m *chatTUI) startTurn(sent, displayed string) tea.Cmd {
 	return tea.Batch(m.spinner.Tick, elapsedTick())
 }
 
+// commitPendingBubble flushes the deferred user bubble into scrollback — a blank
+// separator then the bubble. Called when a turn's first response packet arrives
+// (the message is now really sent) and, defensively, at turn end if it wasn't
+// un-sent. A no-op once committed.
+func (m *chatTUI) commitPendingBubble() {
+	if !m.bubblePending {
+		return
+	}
+	m.bubblePending = false
+	m.commitLine("") // blank line separating turns
+	m.commitLine(renderUserBubble(m.pendingBubble, m.width, m.planMode))
+	m.pendingBubble = ""
+}
+
+// unsendPending "un-sends" the in-flight turn while the server hasn't replied yet
+// (bubblePending): it restores the just-sent text to the input box, drops the
+// deferred bubble, and cancels the request — marking the turn discarded so its
+// already-buffered events reach nothing. Once a packet has arrived the bubble is
+// committed and this path isn't taken (Esc cancels normally instead).
+func (m *chatTUI) unsendPending() {
+	m.input.SetValue(m.pendingBubble)
+	m.growInputToFit()
+	m.bubblePending = false
+	m.pendingBubble = ""
+	m.turnDiscarded = true
+	m.ctrl.Cancel()
+}
+
 // ingestEvent routes one typed event from the agent. Reasoning (dim) and answer
 // free-text accumulate in their live buffers; every other event first finalizes
 // the reasoning and answer streamed so far, then commits its own line —
 // preserving order. Switching on the event Kind replaces the old prefix-sniffing
 // of a flattened byte stream: the structure is now explicit.
 func (m *chatTUI) ingestEvent(e event.Event) {
+	if m.turnDiscarded {
+		// The turn was un-sent (Esc before any packet); swallow whatever was already
+		// buffered for it until it settles, so nothing lands in scrollback.
+		if e.Kind == event.TurnDone {
+			m.turnDiscarded = false
+			m.state = tuiIdle
+		}
+		return
+	}
+	// The first packet of any kind means the server replied — commit the deferred
+	// user bubble before rendering it. TurnStarted is local (emitted before the
+	// request) and TurnDone is handled in its own case, so neither triggers it.
+	if e.Kind != event.TurnStarted && e.Kind != event.TurnDone {
+		m.commitPendingBubble()
+	}
 	switch e.Kind {
 	case event.Reasoning:
 		if m.reasoning.Len() == 0 {
@@ -926,6 +992,16 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 		// real error, and gate a plan-mode proposal on the user's approval.
 		m.commitReasoning()
 		m.commitPending()
+		// If the bubble is still deferred at turn end, the message was sent but
+		// produced nothing visible (an error before any reply, or an empty turn):
+		// commit it so the user sees what they sent — unless this is a user cancel,
+		// where it was already un-sent (handled above) or should leave no trace.
+		if e.Err == nil || !strings.Contains(e.Err.Error(), "context canceled") {
+			m.commitPendingBubble()
+		} else {
+			m.bubblePending = false
+			m.pendingBubble = ""
+		}
 		m.state = tuiIdle
 		_ = m.ctrl.Snapshot() // best-effort; never the user's problem mid-chat
 		if e.Err != nil && e.Err.Error() != "" && !strings.Contains(e.Err.Error(), "context canceled") {
@@ -988,7 +1064,7 @@ func (m *chatTUI) runSlashCommand(input string) tea.Cmd {
 		m.todoArgs = ""
 		m.notice(i18n.M.SlashTodoCleared)
 	case "/mcp":
-		m.showMCPStatus()
+		m.runMCPSubcommand(input)
 	case "/help":
 		m.notice(i18n.M.SlashHelp)
 		if names := m.commandNames(); names != "" {
@@ -1015,6 +1091,50 @@ func (m *chatTUI) commandNames() string {
 		names[i] = "/" + c.Name
 	}
 	return strings.Join(names, " · ")
+}
+
+// runMCPSubcommand handles "/mcp" (status), "/mcp add …" (connect a server live
+// and persist it), and "/mcp remove <name>" (disconnect + drop from config). Add
+// connects synchronously — like /compact, an explicit command may briefly block
+// the UI while the handshake runs.
+func (m *chatTUI) runMCPSubcommand(input string) {
+	args := tokenizeArgs(input) // args[0] == "/mcp"
+	if len(args) < 2 {
+		m.showMCPStatus()
+		return
+	}
+	switch args[1] {
+	case "add":
+		entry, err := parseMCPAdd(args[2:])
+		if err != nil {
+			m.notice(err.Error())
+			return
+		}
+		n, err := m.ctrl.AddMCPServer(entry)
+		if err != nil {
+			m.notice("mcp add: " + err.Error())
+			return
+		}
+		m.notice(fmt.Sprintf("connected %s — %d tools, saved to config (available next message)", entry.Name, n))
+	case "remove", "rm":
+		if len(args) < 3 {
+			m.notice("usage: /mcp remove <name>")
+			return
+		}
+		name := args[2]
+		disconnected, err := m.ctrl.RemoveMCPServer(name)
+		if err != nil {
+			m.notice("mcp remove: " + err.Error())
+			return
+		}
+		if disconnected {
+			m.notice("disconnected " + name + " and removed it from config")
+		} else {
+			m.notice("removed " + name + " from config")
+		}
+	default:
+		m.notice("unknown /mcp subcommand " + args[1] + " — try: /mcp, /mcp add, /mcp remove")
+	}
 }
 
 // showMCPStatus queues the connected MCP servers, their counts, and the prompt

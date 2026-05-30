@@ -88,19 +88,20 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		fmt.Fprintln(os.Stderr, "warning: bash sandbox requested but unavailable on this platform; running bash unconfined")
 	}
 	addBuiltins(reg, cfg.Tools.Enabled, cfg.WriteRoots(), bashSpec)
-	cleanup := func() {}
-	var pluginHost *plugin.Host
+	// Always construct a host, even with no plugins configured, so the controller's
+	// host pointer is stable for the session and `/mcp add` can hot-add into it.
+	pluginHost := plugin.NewHost()
 	if len(cfg.Plugins) > 0 {
 		host, ptools, err := plugin.StartAll(ctx, PluginSpecs(cfg.Plugins))
 		if err != nil {
 			return nil, fmt.Errorf("plugin: %w", err)
 		}
 		pluginHost = host
-		cleanup = host.Close
 		for _, t := range ptools {
 			reg.Add(t)
 		}
 	}
+	cleanup := pluginHost.Close
 
 	maxSteps := cfg.Agent.MaxSteps
 	if opts.MaxSteps > 0 {
@@ -181,6 +182,8 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		Commands:     cmds,
 		Memory:       mem,
 		Cleanup:      cleanup,
+		Registry:     reg,
+		PluginCtx:    ctx,
 	}), nil
 }
 

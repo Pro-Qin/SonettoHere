@@ -5,7 +5,7 @@
 // the kernel via the bridge. This is the desktop analogue of the chat TUI's
 // update loop — same controller, different renderer.
 
-import { useCallback, useEffect, useReducer } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { app, onEvent } from "./bridge";
 import type {
   ContextInfo,
@@ -50,6 +50,14 @@ interface State {
   // currentAssistant tracks the in-flight assistant item that text/reasoning
   // deltas accumulate into; cleared at turn boundaries.
   currentAssistant?: string;
+  // pendingUser holds a just-sent message whose bubble is deferred until the
+  // server's first real packet, so an Esc/Stop before any reply "un-sends" it —
+  // restoring the text to the composer with nothing left in the transcript. It's
+  // committed by the first packet (or, defensively, at turn end). discardTurn is
+  // set on un-send so the cancelled turn's already-buffered events are swallowed
+  // until its turn_done settles.
+  pendingUser?: string;
+  discardTurn?: boolean;
   // turnStartAt is the wall-clock ms the current turn began (0 when idle), and
   // turnTokens accumulates the output tokens reported this turn — together they
   // drive the live "thinking… (12s · ↓3.6k tokens)" activity readout. Pure
@@ -72,6 +80,7 @@ const initialState: State = {
 type Action =
   | { type: "event"; e: WireEvent }
   | { type: "user"; text: string }
+  | { type: "unsend" }
   | { type: "meta"; meta: Meta }
   | { type: "context"; context: ContextInfo }
   | { type: "history"; messages: HistoryMessage[] }
@@ -91,7 +100,33 @@ function ensureAssistant(s: State): { items: Item[]; id: string; seq: number } {
   return { items: [...s.items, item], id, seq: s.seq + 1 };
 }
 
+// flushPendingUser commits the deferred user bubble into the transcript (a no-op
+// when none is pending). Called by the first real packet of a turn, and at turn
+// end as a fallback so an error-before-reply or empty turn still shows what the
+// user sent.
+function flushPendingUser(s: State): State {
+  if (s.pendingUser === undefined) return s;
+  return {
+    ...s,
+    seq: s.seq + 1,
+    items: [...s.items, { kind: "user", id: `u${s.seq}`, text: s.pendingUser }],
+    pendingUser: undefined,
+  };
+}
+
 function applyEvent(s: State, e: WireEvent): State {
+  // After an un-send, swallow the cancelled turn's still-buffered events so no
+  // orphan assistant/tool bubble appears; its turn_done clears the discard.
+  if (s.discardTurn) {
+    if (e.kind === "turn_done") return { ...s, discardTurn: false, running: false, currentAssistant: undefined };
+    return s;
+  }
+  // The first real packet means the server replied — commit the deferred user
+  // bubble before rendering it. turn_started is local (emitted before the
+  // request) and turn_done is handled in its own case, so neither commits.
+  if (s.pendingUser !== undefined && e.kind !== "turn_started" && e.kind !== "turn_done") {
+    s = flushPendingUser(s);
+  }
   switch (e.kind) {
     case "turn_started":
       return { ...s, running: true, currentAssistant: undefined, turnStartAt: Date.now(), turnTokens: 0 };
@@ -208,6 +243,10 @@ function applyEvent(s: State, e: WireEvent): State {
       return { ...s, ask: e.ask };
 
     case "turn_done": {
+      // A turn that ended while its bubble was still deferred (an error before any
+      // reply, or an empty turn) was really sent — commit it so it isn't lost. A
+      // user-cancel before any reply takes the un-send path instead (discardTurn).
+      if (s.pendingUser !== undefined) s = flushPendingUser(s);
       // The turn is over, so nothing more will arrive: freeze a streaming
       // assistant, and settle any tool still "running" (e.g. a call interrupted
       // by cancel, which never gets a result) to "stopped" so it stops spinning.
@@ -227,14 +266,21 @@ function applyEvent(s: State, e: WireEvent): State {
 function reducer(s: State, a: Action): State {
   switch (a.type) {
     case "user":
+      // Defer the bubble (see pendingUser): it lands in the transcript only once
+      // the server replies, so an Esc before then can un-send it cleanly.
       return {
         ...s,
-        seq: s.seq + 1,
         running: true,
         turnStartAt: Date.now(),
         turnTokens: 0,
-        items: [...s.items, { kind: "user", id: `u${s.seq}`, text: a.text }],
+        pendingUser: a.text,
+        discardTurn: false,
       };
+    case "unsend":
+      // Esc/Stop before any reply: drop the deferred bubble and mark the turn
+      // discarded so its trailing events are swallowed. The composer restores the
+      // text from cancel()'s return value.
+      return { ...s, pendingUser: undefined, discardTurn: true, running: false };
     case "meta":
       return { ...s, meta: a.meta };
     case "context":
@@ -265,6 +311,10 @@ function reducer(s: State, a: Action): State {
 
 export function useController() {
   const [state, dispatch] = useReducer(reducer, initialState);
+  // A live mirror of state for event-handler callbacks (useCallback closures are
+  // pinned to the first render); cancel() reads it to decide un-send vs. cancel.
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     const off = onEvent((e) => {
@@ -299,8 +349,19 @@ export function useController() {
     app.Submit(text).catch(() => {});
   }, []);
 
-  const cancel = useCallback(() => {
+  // cancel aborts the in-flight turn. If the server hasn't replied yet (the user
+  // bubble is still deferred), it instead "un-sends" the message and returns its
+  // text so the composer can restore it; otherwise it returns undefined.
+  const cancel = useCallback((): string | undefined => {
+    const cur = stateRef.current;
+    if (cur.running && cur.pendingUser !== undefined) {
+      const text = cur.pendingUser;
+      dispatch({ type: "unsend" });
+      app.Cancel().catch(() => {});
+      return text;
+    }
     app.Cancel().catch(() => {});
+    return undefined;
   }, []);
 
   const approve = useCallback((id: string, allow: boolean, session: boolean) => {

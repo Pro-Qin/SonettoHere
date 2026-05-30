@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 
 	"reasonix/internal/diff"
 	"reasonix/internal/provider"
@@ -94,6 +95,24 @@ func (r *Registry) Add(t Tool) {
 		r.order = append(r.order, name)
 	}
 	r.tools[name] = t
+}
+
+// RemovePrefix unregisters every tool whose name starts with prefix — used to
+// drop an MCP server's "mcp__<server>__" namespace when it's disconnected — and
+// returns the count removed.
+func (r *Registry) RemovePrefix(prefix string) int {
+	kept := r.order[:0]
+	removed := 0
+	for _, name := range r.order {
+		if strings.HasPrefix(name, prefix) {
+			delete(r.tools, name)
+			removed++
+			continue
+		}
+		kept = append(kept, name)
+	}
+	r.order = kept
+	return removed
 }
 
 // Get looks up a tool by name.

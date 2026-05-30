@@ -173,6 +173,90 @@ func (h *Host) Servers() []ServerStatus {
 	return out
 }
 
+// NewHost returns an empty Host. Boot always constructs one — even with no
+// plugins configured — so servers can be hot-added later via Add (the `/mcp add`
+// command), which keeps the controller's host pointer stable for the session.
+func NewHost() *Host { return &Host{} }
+
+// has reports whether a server with this name is already connected.
+func (h *Host) has(name string) bool {
+	for _, c := range h.clients {
+		if c.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Add connects one server live: it performs the MCP handshake, discovers the
+// server's tools (and prompts/resources when advertised), appends it to the
+// host, and returns its namespaced tools for the caller to register. ctx bounds a
+// stdio child's lifetime, so pass the session-scoped context — not a per-turn one
+// — or the subprocess dies when that turn ends. Errors if the name is taken.
+func (h *Host) Add(ctx context.Context, s Spec) ([]tool.Tool, error) {
+	if h.has(s.Name) {
+		return nil, fmt.Errorf("server %q is already connected", s.Name)
+	}
+	c, err := start(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	ts, err := c.listTools(ctx)
+	if err != nil {
+		c.close()
+		return nil, fmt.Errorf("list tools: %w", err)
+	}
+	c.toolCount = len(ts)
+	h.clients = append(h.clients, c)
+	if c.hasPrompts {
+		if ps, perr := c.listPrompts(ctx); perr == nil {
+			h.prompts = append(h.prompts, ps...)
+		}
+	}
+	if c.hasResources {
+		if rs, rerr := c.listResources(ctx); rerr == nil {
+			h.resources = append(h.resources, rs...)
+		}
+	}
+	return ts, nil
+}
+
+// Remove disconnects the named server and drops its prompts/resources, returning
+// the namespaced tool-name prefix ("mcp__<server>__") the caller unregisters from
+// the tool registry, and whether the server was connected.
+func (h *Host) Remove(name string) (toolPrefix string, found bool) {
+	idx := -1
+	for i, c := range h.clients {
+		if c.name == name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return "", false
+	}
+	h.clients[idx].close()
+	h.clients = append(h.clients[:idx], h.clients[idx+1:]...)
+
+	keptP := h.prompts[:0]
+	for _, p := range h.prompts {
+		if p.Server != name {
+			keptP = append(keptP, p)
+		}
+	}
+	h.prompts = keptP
+
+	keptR := h.resources[:0]
+	for _, r := range h.resources {
+		if r.Server != name {
+			keptR = append(keptR, r)
+		}
+	}
+	h.resources = keptR
+
+	return "mcp__" + normalizeName(name) + "__", true
+}
+
 func start(ctx context.Context, s Spec) (*Client, error) {
 	t, err := newTransport(ctx, s)
 	if err != nil {

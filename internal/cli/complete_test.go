@@ -165,6 +165,84 @@ func TestFileItemsHiddenWhenDotTyped(t *testing.T) {
 	}
 }
 
+// TestSlashArgCompletionMCPSubcommands proves the menu now follows past the
+// command word: "/mcp " opens an argument menu of subcommands rather than going
+// dark the moment a space is typed.
+func TestSlashArgCompletionMCPSubcommands(t *testing.T) {
+	m := newTestChatTUI()
+	m.input.SetValue("/mcp ")
+	m.updateCompletion()
+	if !m.completion.active || m.completion.kind != compSlashArg {
+		t.Fatalf("/mcp <space> should open the argument menu: %+v", m.completion)
+	}
+	for _, want := range []string{"add", "remove", "list"} {
+		if !hasLabel(m.completion.items, want) {
+			t.Errorf("subcommand %q missing: %v", want, labels(m.completion.items))
+		}
+	}
+}
+
+// TestSlashArgCompletionMCPFilterAndAccept proves the typed prefix filters the
+// subcommands and that accepting replaces only the current token (not the line).
+func TestSlashArgCompletionMCPFilterAndAccept(t *testing.T) {
+	m := newTestChatTUI()
+	m.input.SetValue("/mcp re")
+	m.updateCompletion()
+	if len(m.completion.items) != 1 || m.completion.items[0].label != "remove" {
+		t.Fatalf("/mcp re should filter to remove, got %v", labels(m.completion.items))
+	}
+	m.acceptCompletion()
+	if got := m.input.Value(); got != "/mcp remove " {
+		t.Errorf("accept should replace just the token, got %q want %q", got, "/mcp remove ")
+	}
+}
+
+// TestSlashArgCompletionMCPAddFlags proves add offers transport flags once the
+// token starts with "-", and stays quiet for the free-form server name.
+func TestSlashArgCompletionMCPAddFlags(t *testing.T) {
+	m := newTestChatTUI()
+	m.input.SetValue("/mcp add myserver --h")
+	m.updateCompletion()
+	if !hasLabel(m.completion.items, "--http") {
+		t.Errorf("--h should offer --http: %v", labels(m.completion.items))
+	}
+
+	m.input.SetValue("/mcp add my")
+	m.updateCompletion()
+	if m.completion.active {
+		t.Error("the free-form server name should not open a menu")
+	}
+}
+
+// TestSlashArgCompletionChainsFromName proves accepting "/mcp" chains straight
+// into the subcommand menu (the command is marked to descend on accept).
+func TestSlashArgCompletionChainsFromName(t *testing.T) {
+	m := newTestChatTUI()
+	m.input.SetValue("/mcp")
+	m.updateCompletion()
+	m.acceptCompletion()
+	if got := m.input.Value(); got != "/mcp " {
+		t.Fatalf("accepting /mcp should fill %q, got %q", "/mcp ", got)
+	}
+	if !m.completion.active || m.completion.kind != compSlashArg {
+		t.Fatalf("accepting /mcp should chain into the subcommand menu: %+v", m.completion)
+	}
+	if !hasLabel(m.completion.items, "add") {
+		t.Errorf("chained menu should list subcommands: %v", labels(m.completion.items))
+	}
+}
+
+// TestSlashArgCompletionRemoveNoHost proves "/mcp remove " stays closed when no
+// servers are connected (nothing to suggest), rather than showing an empty box.
+func TestSlashArgCompletionRemoveNoHost(t *testing.T) {
+	m := newTestChatTUI()
+	m.input.SetValue("/mcp remove ")
+	m.updateCompletion()
+	if m.completion.active {
+		t.Error("remove with no connected servers should not open a menu")
+	}
+}
+
 func labels(items []compItem) []string {
 	out := make([]string, len(items))
 	for i, it := range items {

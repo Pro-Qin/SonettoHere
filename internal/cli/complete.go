@@ -14,8 +14,9 @@ import (
 type compKind int
 
 const (
-	compSlash compKind = iota // slash commands, when the line starts with "/"
-	compAt                    // @-references (files / MCP resources)
+	compSlash    compKind = iota // slash command names, while the line is a bare "/word"
+	compSlashArg                 // a structured argument of a slash command (e.g. "/mcp remove <name>")
+	compAt                       // @-references (files / MCP resources)
 )
 
 // compItem is one menu row: label shown, insert applied on accept, hint dimmed.
@@ -54,7 +55,7 @@ func (m *chatTUI) slashItems() []compItem {
 	items := []compItem{
 		{label: "/compact", insert: "/compact ", hint: "compact context"},
 		{label: "/new", insert: "/new ", hint: "fork a fresh session"},
-		{label: "/mcp", insert: "/mcp ", hint: "MCP servers"},
+		{label: "/mcp", insert: "/mcp ", hint: "MCP servers", descend: true},
 		{label: "/help", insert: "/help ", hint: "list commands"},
 		{label: "/memory", insert: "/memory ", hint: "show memory files"},
 	}
@@ -73,13 +74,8 @@ func (m *chatTUI) slashItems() []compItem {
 func (m *chatTUI) updateCompletion() {
 	val := m.input.Value()
 
-	if strings.HasPrefix(val, "/") && !strings.ContainsAny(val, " \t\n") {
-		if items := filterByPrefix(m.slashItems(), val); len(items) > 0 {
-			m.setCompletion(compSlash, items, 0)
-			return
-		}
-	}
-
+	// An @-reference token under the cursor wins — it can appear mid-line, even
+	// inside a slash command's arguments (e.g. "/review @file").
 	if at, token, ok := activeAtToken(val); ok {
 		if items := m.atItems(token); len(items) > 0 {
 			m.setCompletion(compAt, items, at)
@@ -87,7 +83,81 @@ func (m *chatTUI) updateCompletion() {
 		}
 	}
 
+	if strings.HasPrefix(val, "/") {
+		if !strings.ContainsAny(val, " \t\n") {
+			// Still naming the command itself.
+			if items := filterByPrefix(m.slashItems(), val); len(items) > 0 {
+				m.setCompletion(compSlash, items, 0)
+				return
+			}
+		} else if items, from, ok := m.slashArgItems(val); ok && len(items) > 0 {
+			// Past the command word — complete its structured arguments.
+			m.setCompletion(compSlashArg, items, from)
+			return
+		}
+	}
+
 	m.completion = completion{}
+}
+
+// slashArgItems completes the arguments of a slash command (everything after the
+// command word). It returns the menu items, the byte offset where the current
+// token begins (replaceFrom, so accept replaces just that token), and whether
+// anything applied. Only commands with structured arguments participate —
+// currently /mcp; custom commands and MCP prompts take free-form template args,
+// so they yield nothing.
+func (m *chatTUI) slashArgItems(val string) ([]compItem, int, bool) {
+	cmdEnd := strings.IndexAny(val, " \t")
+	if cmdEnd < 0 {
+		return nil, 0, false
+	}
+	from := strings.LastIndexAny(val, " \t") + 1
+	cur := val[from:]
+	switch val[:cmdEnd] {
+	case "/mcp":
+		return m.mcpArgItems(val, cur, from)
+	}
+	return nil, 0, false
+}
+
+// mcpArgItems completes /mcp arguments: the subcommand (add/remove/list); then,
+// for "remove", the names of connected servers; and for "add", the transport
+// flags once the current token starts with "-". `cur` is the token being typed
+// and `from` its start offset.
+func (m *chatTUI) mcpArgItems(val, cur string, from int) ([]compItem, int, bool) {
+	prior := strings.Fields(val[:from]) // already-committed tokens, including "/mcp"
+	if len(prior) <= 1 {
+		subs := []compItem{
+			{label: "add", insert: "add ", hint: "connect a server", descend: true},
+			{label: "remove", insert: "remove ", hint: "disconnect a server", descend: true},
+			{label: "list", insert: "list", hint: "show configured servers"},
+		}
+		return filterByPrefix(subs, cur), from, true
+	}
+	switch prior[1] {
+	case "remove", "rm":
+		if len(prior) != 2 { // the single name arg is already placed
+			return nil, 0, false
+		}
+		var items []compItem
+		if m.host != nil {
+			for _, name := range m.host.ServerNames() {
+				items = append(items, compItem{label: name, insert: name, hint: "connected"})
+			}
+		}
+		return filterByPrefix(items, cur), from, true
+	case "add":
+		if strings.HasPrefix(cur, "-") {
+			flags := []compItem{
+				{label: "--http", insert: "--http ", hint: "Streamable HTTP URL"},
+				{label: "--sse", insert: "--sse ", hint: "legacy SSE URL"},
+				{label: "--env", insert: "--env ", hint: "KEY=VALUE (stdio)"},
+				{label: "--header", insert: "--header ", hint: "KEY=VALUE (remote)"},
+			}
+			return filterByPrefix(flags, cur), from, true
+		}
+	}
+	return nil, 0, false
 }
 
 // setCompletion installs items, preserving the selection index only while the
