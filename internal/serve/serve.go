@@ -15,8 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"reasonix/internal/agent"
+	"reasonix/internal/boot"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
@@ -30,6 +33,7 @@ var indexHTML []byte
 // Server wires a controller to its HTTP surface. The Broadcaster must be the
 // same sink the controller was constructed with, so events reach SSE clients.
 type Server struct {
+	mu        sync.RWMutex // guards ctrl, which switchModel swaps at runtime
 	ctrl      *control.Controller
 	bc        *Broadcaster
 	titleProv provider.Provider // lightweight flash provider for session titles
@@ -41,6 +45,14 @@ func New(ctrl *control.Controller, bc *Broadcaster) *Server {
 	s := &Server{ctrl: ctrl, bc: bc, titles: newTitleCache(ctrl.SessionDir())}
 	s.initTitleProvider()
 	return s
+}
+
+// ctl returns the current controller. Handlers must read it through here, never
+// the field directly, because switchModel replaces it under the write lock.
+func (s *Server) ctl() *control.Controller {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ctrl
 }
 
 // initTitleProvider builds a lightweight flash-model provider used solely to
@@ -66,6 +78,45 @@ func (s *Server) initTitleProvider() {
 		return
 	}
 	s.titleProv = prov
+}
+
+// switchModel rebuilds the controller with a new model, carrying over the
+// conversation history. This replicates the TUI/desktop model-switch path. The
+// write lock is held across the whole rebuild so concurrent requests never read
+// a half-swapped controller and two switches can't run at once.
+func (s *Server) switchModel(ctx context.Context, ref string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.ctrl
+	if cur.Running() {
+		return fmt.Errorf("cannot switch model while a turn is running")
+	}
+	if err := cur.Snapshot(); err != nil {
+		slog.Warn("serve: snapshot before model switch", "err", err)
+	}
+	carried := cur.History()
+
+	newCtrl, err := boot.Build(ctx, boot.Options{
+		Model:  ref,
+		Sink:   s.bc,
+		Stderr: os.Stderr,
+	})
+	if err != nil {
+		return fmt.Errorf("switch model: %w", err)
+	}
+	newPath := ""
+	if dir := newCtrl.SessionDir(); dir != "" {
+		newPath = agent.NewSessionPath(dir, newCtrl.Label())
+	}
+	if len(carried) > 0 {
+		newCtrl.Resume(&agent.Session{Messages: carried}, newPath)
+	} else if newPath != "" {
+		newCtrl.SetSessionPath(newPath)
+	}
+
+	s.ctrl = newCtrl
+	cur.Close()
+	return nil
 }
 
 // Handler returns the HTTP routes: GET / (a minimal browser client), GET /events
@@ -136,7 +187,7 @@ func csrfGuard(next http.Handler) http.Handler {
 // Run serves until the process is killed. Interactive approval is enabled so
 // "ask" decisions surface as approval_request events answered via POST /approve.
 func (s *Server) Run(addr string) error {
-	s.ctrl.EnableInteractiveApproval()
+	s.ctl().EnableInteractiveApproval()
 	return http.ListenAndServe(addr, s.Handler())
 }
 
@@ -144,7 +195,7 @@ func (s *Server) Run(addr string) error {
 // the provided context and drains active connections for up to 10 seconds
 // before returning.
 func (s *Server) RunGraceful(ctx context.Context, addr string) error {
-	s.ctrl.EnableInteractiveApproval()
+	s.ctl().EnableInteractiveApproval()
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           s.Handler(),
@@ -216,12 +267,25 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing input", http.StatusBadRequest)
 		return
 	}
-	s.ctrl.Submit(body.Input)
+	// Intercept /model <ref> for runtime model switching (the controller's
+	// Submit path only lists models — switching is frontend-specific).
+	if trimmed := strings.TrimSpace(body.Input); strings.HasPrefix(trimmed, "/model ") {
+		ref := strings.TrimSpace(strings.TrimPrefix(trimmed, "/model"))
+		if ref != "" {
+			if err := s.switchModel(r.Context(), ref); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	s.ctl().Submit(body.Input)
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) cancel(w http.ResponseWriter, _ *http.Request) {
-	s.ctrl.Cancel()
+	s.ctl().Cancel()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -235,7 +299,7 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
-	s.ctrl.Approve(body.ID, body.Allow, body.Session)
+	s.ctl().Approve(body.ID, body.Allow, body.Session)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -247,20 +311,24 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	s.ctrl.SetPlanMode(body.On)
+	s.ctl().SetPlanMode(body.On)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctrl.Compact(r.Context(), ""); err != nil {
+	if err := s.ctl().Compact(r.Context(), ""); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// Persist the compacted session to disk — ctrl.Compact() only mutates in-memory.
+	if err := s.ctl().Snapshot(); err != nil {
+		slog.Warn("serve: snapshot after compact", "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) newSession(w http.ResponseWriter, _ *http.Request) {
-	if err := s.ctrl.NewSession(); err != nil {
+	if err := s.ctl().NewSession(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -275,7 +343,7 @@ func (s *Server) history(w http.ResponseWriter, _ *http.Request) {
 		Content string `json:"content"`
 	}
 	var out []msg
-	for _, m := range s.ctrl.History() {
+	for _, m := range s.ctl().History() {
 		out = append(out, msg{Role: string(m.Role), Content: m.Content})
 	}
 	writeJSON(w, out)
@@ -283,7 +351,7 @@ func (s *Server) history(w http.ResponseWriter, _ *http.Request) {
 
 // context returns the prompt-vs-window gauge numbers.
 func (s *Server) context(w http.ResponseWriter, _ *http.Request) {
-	used, window := s.ctrl.ContextSnapshot()
+	used, window := s.ctl().ContextSnapshot()
 	writeJSON(w, map[string]int{"used": used, "window": window})
 }
 
@@ -366,7 +434,7 @@ func (s *Server) rewind(w http.ResponseWriter, r *http.Request) {
 	case "conversation":
 		scope = control.RewindConversation
 	}
-	if err := s.ctrl.Rewind(body.Turn, scope); err != nil {
+	if err := s.ctl().Rewind(body.Turn, scope); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -383,7 +451,7 @@ func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing turn", http.StatusBadRequest)
 		return
 	}
-	path, err := s.ctrl.ForkNamed(body.Turn, body.Name)
+	path, err := s.ctl().ForkNamed(body.Turn, body.Name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -404,9 +472,9 @@ func (s *Server) summarize(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch body.Mode {
 	case "from":
-		err = s.ctrl.SummarizeFrom(r.Context(), body.Turn)
+		err = s.ctl().SummarizeFrom(r.Context(), body.Turn)
 	case "upto":
-		err = s.ctrl.SummarizeUpTo(r.Context(), body.Turn)
+		err = s.ctl().SummarizeUpTo(r.Context(), body.Turn)
 	default:
 		http.Error(w, "mode must be 'from' or 'upto'", http.StatusBadRequest)
 		return
@@ -427,7 +495,7 @@ func (s *Server) bypass(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	s.ctrl.SetBypass(body.On)
+	s.ctl().SetBypass(body.On)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -441,11 +509,11 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
-	s.ctrl.AnswerQuestion(body.ID, body.Answers)
+	s.ctl().AnswerQuestion(body.ID, body.Answers)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// resume loads a previous session by index.
+// resume loads a previous session from a JSONL file.
 func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Path string `json:"path"`
@@ -454,9 +522,17 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing path", http.StatusBadRequest)
 		return
 	}
-	// Use Submit to handle /resume which the controller dispatches
-	s.ctrl.Submit("/resume " + body.Path)
-	w.WriteHeader(http.StatusAccepted)
+	// Snapshot the current session before switching away.
+	if err := s.ctl().Snapshot(); err != nil {
+		slog.Warn("serve: snapshot before resume", "err", err)
+	}
+	loaded, err := agent.LoadSession(body.Path)
+	if err != nil {
+		http.Error(w, "load session: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.ctl().Resume(loaded, body.Path)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // forget deletes a saved memory by name.
@@ -468,7 +544,7 @@ func (s *Server) forget(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing name", http.StatusBadRequest)
 		return
 	}
-	if err := s.ctrl.ForgetMemory(body.Name); err != nil {
+	if err := s.ctl().ForgetMemory(body.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -482,7 +558,7 @@ func (s *Server) checkpoints(w http.ResponseWriter, _ *http.Request) {
 		Prompt string `json:"prompt"`
 		Files  int    `json:"files"`
 	}
-	raw := s.ctrl.Checkpoints()
+	raw := s.ctl().Checkpoints()
 	out := make([]cp, len(raw))
 	for i, c := range raw {
 		out[i] = cp{Turn: c.Turn, Prompt: c.Prompt, Files: len(c.Paths)}
@@ -492,37 +568,37 @@ func (s *Server) checkpoints(w http.ResponseWriter, _ *http.Request) {
 
 // branches returns the branch list and tree text.
 func (s *Server) branches(w http.ResponseWriter, _ *http.Request) {
-	branches, err := s.ctrl.Branches()
+	branches, err := s.ctl().Branches()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tree := s.ctrl.BranchTreeText()
+	tree := s.ctl().BranchTreeText()
 	writeJSON(w, map[string]any{"branches": branches, "tree": tree})
 }
 
 // status returns a combined status snapshot.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
-	used, window := s.ctrl.ContextSnapshot()
-	hit, miss := s.ctrl.SessionCache()
+	used, window := s.ctl().ContextSnapshot()
+	hit, miss := s.ctl().SessionCache()
 	sess := map[string]any{
-		"label":     s.ctrl.Label(),
-		"running":   s.ctrl.Running(),
-		"plan":      s.ctrl.PlanMode(),
-		"bypass":    s.ctrl.Bypass(),
-		"cwd":       s.ctrl.SessionDir(),
+		"label":     s.ctl().Label(),
+		"running":   s.ctl().Running(),
+		"plan":      s.ctl().PlanMode(),
+		"bypass":    s.ctl().Bypass(),
+		"cwd":       s.ctl().SessionDir(),
 		"used":      used,
 		"window":    window,
 		"cacheHit":  hit,
 		"cacheMiss": miss,
 	}
-	if u := s.ctrl.LastUsage(); u != nil {
+	if u := s.ctl().LastUsage(); u != nil {
 		sess["lastUsage"] = u
 	}
-	if b, err := s.ctrl.Balance(r.Context()); err == nil && b != nil {
+	if b, err := s.ctl().Balance(r.Context()); err == nil && b != nil {
 		sess["balance"] = b
 	}
-	if j := s.ctrl.Jobs(); len(j) > 0 {
+	if j := s.ctl().Jobs(); len(j) > 0 {
 		sess["jobs"] = j
 	}
 	writeJSON(w, sess)
@@ -569,7 +645,7 @@ func (s *Server) generateTitle(ctx context.Context, firstMsg string) string {
 // sessions lists saved session files from the session directory, enriched with
 // LLM-generated titles and turn counts.
 func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
-	dir := s.ctrl.SessionDir()
+	dir := s.ctl().SessionDir()
 	if dir == "" {
 		writeJSON(w, []any{})
 		return
@@ -586,7 +662,7 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []any{})
 		return
 	}
-	current := filepath.Clean(s.ctrl.SessionPath())
+	current := filepath.Clean(s.ctl().SessionPath())
 	var out []sessionEntry
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
@@ -676,7 +752,7 @@ func (s *Server) skills(w http.ResponseWriter, _ *http.Request) {
 		Subagent    bool   `json:"subagent"`
 		Description string `json:"description"`
 	}
-	raw := s.ctrl.Skills()
+	raw := s.ctl().Skills()
 	out := make([]skillEntry, len(raw))
 	for i, sk := range raw {
 		out[i] = skillEntry{Name: sk.Name, Scope: string(sk.Scope), Subagent: sk.RunAs == "subagent", Description: sk.Description}
