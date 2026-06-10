@@ -306,6 +306,8 @@ export const en = {
   "composer.pastedExpand": "Expand",
   "composer.pastedRemove": "Remove pasted text",
   "composer.removeImage": "Remove image",
+  "composer.attachImageFailed": "Image paste failed",
+  "composer.pasteImageFailed": "Could not read clipboard image",
   "composer.contextItems": "Context items",
   "composer.workspaceReferences": "Workspace references",
   "composer.removeReference": "Remove reference",

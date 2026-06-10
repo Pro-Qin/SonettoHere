@@ -307,6 +307,8 @@ export const zh: Record<DictKey, string> = {
   "composer.pastedExpand": "展开",
   "composer.pastedRemove": "删除粘贴文本",
   "composer.removeImage": "移除图片",
+  "composer.attachImageFailed": "图片粘贴失败",
+  "composer.pasteImageFailed": "未能读取剪贴板图片",
   "composer.contextItems": "上下文项目",
   "composer.workspaceReferences": "工作区引用",
   "composer.removeReference": "移除引用",
