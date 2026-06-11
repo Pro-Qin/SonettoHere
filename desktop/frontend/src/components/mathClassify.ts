@@ -10,6 +10,9 @@ export function isLikelyInlineMath(math: string): boolean {
   // $5), so the $N$ form almost always means math.
   if (/^\d+(?:\.\d+)?%?$/.test(math)) return true;
 
+  // Unary plus/minus: +2, -x, +\alpha, - 3.14
+  if (/^[+\-]\s*(?:\d+(?:\.\d+)?|[A-Za-z\\])/.test(math)) return true;
+
   if (/\\[A-Za-z]+\b/.test(math)) return true;
   if (/[\^_{}|]/.test(math)) return true;
   if (/\b(?:alpha|beta|gamma|sum|int|prod|lim|infty|sqrt|frac|sin|cos|tan|log|ln|max|min|partial|nabla|left|right)\b/.test(math)) return true;
