@@ -17,6 +17,9 @@ import {
   Settings as SettingsIcon,
   Pencil,
   Trash2,
+  Brain,
+  Cpu,
+  Palette,
 } from "lucide-react";
 import { useToast } from "./lib/toast";
 import { asArray } from "./lib/array";
@@ -77,6 +80,7 @@ import {
 import { loadLayoutSize, saveLayoutSize } from "./lib/layoutPreferences";
 import { hydrateDisplayMode } from "./lib/displayMode";
 import { blobToBase64, renderSessionImageBlob, renderSessionPdfBlob } from "./lib/sessionExport";
+import { sessionActivityTime } from "./lib/session";
 import {
   applyTheme,
   clearLegacyThemePreference,
@@ -2024,19 +2028,28 @@ export default function App() {
   }, [openPalette]);
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const cmds: PaletteItem[] = [
-      { id: "cmd-new", group: t("palette.group.commands"), title: t("palette.cmd.newSession"), keywords: ["new", "新建"], run: () => void handleNewTab() },
-      { id: "cmd-history", group: t("palette.group.commands"), title: t("palette.cmd.history"), keywords: ["history", "历史"], run: () => void openAllHistory() },
-      { id: "cmd-trash", group: t("palette.group.commands"), title: t("palette.cmd.trash"), keywords: ["trash", "回收站"], run: () => void openTrash() },
-      { id: "cmd-settings", group: t("palette.group.commands"), title: t("palette.cmd.settings"), keywords: ["settings", "设置"], run: () => setSettingsTarget("general") },
-      { id: "cmd-appearance", group: t("palette.group.commands"), title: t("palette.cmd.appearance"), keywords: ["theme", "appearance", "外观", "主题"], run: () => setSettingsTarget("appearance") },
-      { id: "cmd-memory", group: t("palette.group.commands"), title: t("palette.cmd.memory"), keywords: ["memory", "记忆"], run: () => setSettingsTarget("memory") },
-      { id: "cmd-models", group: t("palette.group.commands"), title: t("palette.cmd.models"), keywords: ["model", "模型"], run: () => setSettingsTarget("models") },
+      { id: "cmd-new", group: t("palette.group.commands"), title: t("palette.cmd.newSession"), icon: <SquarePen size={15} />, compact: true, keywords: ["new", "新建"], run: () => void handleNewTab() },
+      { id: "cmd-history", group: t("palette.group.commands"), title: t("palette.cmd.history"), icon: <History size={15} />, compact: true, keywords: ["history", "历史"], run: () => void openAllHistory() },
+      { id: "cmd-trash", group: t("palette.group.commands"), title: t("palette.cmd.trash"), icon: <Trash2 size={15} />, compact: true, keywords: ["trash", "回收站"], run: () => void openTrash() },
+      { id: "cmd-settings", group: t("palette.group.commands"), title: t("palette.cmd.settings"), icon: <SettingsIcon size={15} />, compact: true, keywords: ["settings", "设置"], run: () => setSettingsTarget("general") },
+      { id: "cmd-appearance", group: t("palette.group.commands"), title: t("palette.cmd.appearance"), icon: <Palette size={15} />, compact: true, keywords: ["theme", "appearance", "外观", "主题"], run: () => setSettingsTarget("appearance") },
+      { id: "cmd-memory", group: t("palette.group.commands"), title: t("palette.cmd.memory"), icon: <Brain size={15} />, compact: true, keywords: ["memory", "记忆"], run: () => setSettingsTarget("memory") },
+      { id: "cmd-models", group: t("palette.group.commands"), title: t("palette.cmd.models"), icon: <Cpu size={15} />, compact: true, keywords: ["model", "模型"], run: () => setSettingsTarget("models") },
     ];
+    const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const dayLabel = (ms: number) => {
+      const days = Math.round((startOfDay(new Date()) - startOfDay(new Date(ms))) / 86_400_000);
+      if (days <= 0) return t("history.today");
+      if (days === 1) return t("history.yesterday");
+      return new Date(ms).toLocaleDateString();
+    };
     const sessionItems: PaletteItem[] = paletteSessions.slice(0, 12).map((s) => ({
       id: `sess-${s.path}`,
       group: t("palette.group.sessions"),
       title: s.title?.trim() || s.preview || t("history.emptySession"),
       hint: s.workspaceRoot || undefined,
+      meta: dayLabel(sessionActivityTime(s)),
+      badge: t(s.turns === 1 ? "history.turnOne" : "history.turnOther", { n: s.turns }),
       run: () => void onResumeSession(s),
     }));
     return [...cmds, ...sessionItems];
