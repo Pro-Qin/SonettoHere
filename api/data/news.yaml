@@ -1,4 +1,12 @@
 news:
+  - id: "switch-to-markdown-it"
+    title: "Markdown 渲染引擎升级"
+    description: "Markdown 渲染引擎从 marked 切换到 markdown-it，新增 \(...\) 和 \[...\] 数学公式定界符支持。公式渲染失败时自动降级显示原文，不再抛错中断。"
+    type: "feat"
+    date: "2026-06-14"
+    tags: ["渲染", "数学公式", "Markdown", "KaTeX"]
+    version: ""
+    pr_number: 108
   - id: "url-paste-fix"
     title: "粘贴 URL 识别修复"
     description: "修复粘贴非 URL 文本（如中文）误触发链接引用的问题。改用 new URL() 解析和域名预检，仅真正像域名的内容才会被识别为链接引用。"
