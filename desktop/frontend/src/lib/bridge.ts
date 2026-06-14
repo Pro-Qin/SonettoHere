@@ -19,6 +19,8 @@ import type {
   BotInstallStartResult,
   BotRuntimeStatusView,
   BotSettingsView,
+  BuiltInMCPUpdateResult,
+  BuiltInMCPUpdateStatus,
   CapabilitiesView,
   CheckpointMeta,
   CommandInfo,
@@ -163,6 +165,8 @@ export interface AppBindings {
   UpdateMCPServer(name: string, input: MCPServerInput): Promise<void>;
   RemoveMCPServer(name: string): Promise<void>;
   ReconnectMCPServer(name: string): Promise<void>;
+  UpdateBuiltInMCPServer(name: string): Promise<BuiltInMCPUpdateResult>;
+  BuiltInMCPUpdateStatuses(): Promise<BuiltInMCPUpdateStatus[]>;
   ClearMCPServerAuthentication(name: string): Promise<void>;
   PickSkillFolder(): Promise<string>;
   AddSkillPath(path: string): Promise<void>;
@@ -364,6 +368,13 @@ export function onUpdaterProgress(cb: (p: UpdateProgress) => void): () => void {
   };
 }
 
+export function onBuiltInMCPUpdate(cb: (status: BuiltInMCPUpdateStatus) => void): () => void {
+  if (realApp() && typeof window !== "undefined" && window.runtime) {
+    return window.runtime.EventsOn("builtin-mcp:update", (status) => cb(status as BuiltInMCPUpdateStatus));
+  }
+  return () => {};
+}
+
 // onFilesDropped subscribes to native OS file drops landing on the composer (the
 // --wails-drop-target element); the callback gets the dropped files' absolute
 // paths. No-op in the browser dev mock, where the runtime is absent.
@@ -429,7 +440,7 @@ function bridgeBreadcrumb(method: string): string {
   if (/^(SaveProvider|AddOfficialProviderAccess|RemoveProviderAccess|DeleteProvider|SetProviderKey|ClearProviderKey|FetchProviderModels|ConnectKey)/.test(method))
     return `provider ${method}`;
   if (/^(CheckUpdate|ApplyUpdate|OpenDownloadPage)/.test(method)) return `update ${method}`;
-  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|ClearMCPServerAuthentication|SetMCPServer)/.test(method))
+  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer)/.test(method))
     return `mcp ${method}`;
   if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion)/.test(method))
     return `skill ${method}`;
@@ -555,6 +566,8 @@ function makeMockApp(): AppBindings {
       configured: true,
       autoStart: false,
       tier: "background",
+      command: "codegraph",
+      args: ["serve", "--mcp"],
       tools: 0,
       prompts: 0,
       resources: 0,
@@ -619,6 +632,15 @@ function makeMockApp(): AppBindings {
       ],
     },
     { name: "figma", transport: "http", status: "failed", configured: true, autoStart: true, tier: "background", url: "https://mcp.figma.com/mcp", authStatus: "required", authUrl: "https://mcp.figma.com/mcp", tools: 0, prompts: 0, resources: 0, error: "connect: 401 unauthorized" },
+  ];
+  let builtInMCPUpdates: BuiltInMCPUpdateStatus[] = [
+    {
+      name: "codegraph",
+      mode: "notify",
+      current: "v0.9.7",
+      latest: "v0.10.0",
+      phase: "available",
+    },
   ];
   const capSkills: SkillView[] = [
     { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true },
@@ -734,12 +756,12 @@ function makeMockApp(): AppBindings {
     autoPlan: "off",
     providers: [
       { name: "deepseek", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.deepseek.com", modelsUrl: "", models: ["deepseek-v4-flash"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: true, balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
-      { name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+      { name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro", "mimo-v2.5"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
     ],
     officialProviders: [
       { name: "deepseek", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.deepseek.com", modelsUrl: "", models: ["deepseek-v4-flash", "deepseek-v4-pro"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: true, balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
-      { name: "mimo-api", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
-      { name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+      { name: "mimo-api", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-omni"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+      { name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro", "mimo-v2.5"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
     ],
     permissions: { mode: "ask", allow: ["ls", "read_file"], ask: [], deny: ["Bash(rm:*)"] },
     sandbox: { bash: "enforce", network: true, workspaceRoot: "", allowWrite: [], shell: "auto" },
@@ -807,6 +829,10 @@ function makeMockApp(): AppBindings {
             {
               remoteId: "ou_mock_user_001",
               sessionId: "topic:topic_product",
+              sessionSource: "",
+              chatType: "",
+              userId: "",
+              threadId: "",
               scope: "global",
               workspaceRoot: "",
               updatedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
@@ -837,6 +863,10 @@ function makeMockApp(): AppBindings {
             {
               remoteId: "wxid_mock_user_001",
               sessionId: "topic:topic_ai",
+              sessionSource: "",
+              chatType: "",
+              userId: "",
+              threadId: "",
               scope: "global",
               workspaceRoot: "",
               updatedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
@@ -1897,6 +1927,28 @@ function makeMockApp(): AppBindings {
         s.name === name ? { ...s, status: "connected", tools: s.tools || 4 } : s,
       );
     },
+    async UpdateBuiltInMCPServer(name: string) {
+      if (name !== "codegraph") throw new Error(`${name} is not an updatable built-in MCP server`);
+      capServers = capServers.map((s) =>
+        s.name === name
+          ? { ...s, status: s.autoStart ? "connected" : s.status, tools: s.autoStart ? s.tools || 4 : s.tools, error: undefined }
+          : s,
+      );
+      builtInMCPUpdates = [
+        {
+          name,
+          mode: "manual",
+          current: "v0.10.0",
+          latest: "v0.10.0",
+          phase: "activated",
+          path: "/tmp/reasonix/codegraph/mock/codegraph",
+        },
+      ];
+      return { name, version: "v0.10.0", path: "/tmp/reasonix/codegraph/mock/codegraph" };
+    },
+    async BuiltInMCPUpdateStatuses() {
+      return builtInMCPUpdates.map((s) => ({ ...s }));
+    },
     async ClearMCPServerAuthentication(name: string) {
       capServers = capServers.map((s) =>
         s.name === name
@@ -2314,8 +2366,8 @@ function makeMockApp(): AppBindings {
     async AddOfficialProviderAccess(kind: string, key: string) {
       const templates: Record<string, ProviderView> = {
         deepseek: { name: "deepseek", builtIn: true, added: true, kind: "openai", baseUrl: "https://api.deepseek.com", modelsUrl: "", models: ["deepseek-v4-flash", "deepseek-v4-pro"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: !!key.trim(), balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
-        "mimo-api": { name: "mimo-api", builtIn: true, added: true, kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: !!key.trim(), balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
-        "mimo-token-plan": { name: "mimo-token-plan", builtIn: true, added: true, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: !!key.trim(), balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+        "mimo-api": { name: "mimo-api", builtIn: true, added: true, kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-omni"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: !!key.trim(), balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+        "mimo-token-plan": { name: "mimo-token-plan", builtIn: true, added: true, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro", "mimo-v2.5"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: !!key.trim(), balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
       };
       const next = templates[kind] ?? templates.deepseek;
       const i = settings.providers.findIndex((x) => x.name === next.name);

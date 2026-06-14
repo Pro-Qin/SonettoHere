@@ -418,9 +418,11 @@ func (t *WorkspaceTab) telemetrySnapshot() tabTelemetrySnapshot {
 // tabEventSink wraps a parent event.Sink and prepends a tabId to every wire
 // event so the frontend can route it to the correct tab's reducer.
 type tabEventSink struct {
-	tabID string
-	app   *App
-	ctx   context.Context
+	tabID         string
+	app           *App
+	mu            sync.RWMutex
+	ctx           context.Context
+	runtimeEvents asyncRuntimeEmitter
 }
 
 func (s *tabEventSink) Emit(e event.Event) {
@@ -440,9 +442,7 @@ func (s *tabEventSink) Emit(e event.Event) {
 			}
 		}
 	}
-	if s.ctx != nil {
-		runtime.EventsEmit(s.ctx, eventChannel, toWireTab(e, s.tabID))
-	}
+	s.emitRuntimeEvent(eventChannel, toWireTab(e, s.tabID))
 	if s.app != nil {
 		if status, update := topicActivityStatusFromEvent(e); update {
 			changed := s.app.setTabActivityStatus(s.tabID, status)
@@ -458,6 +458,111 @@ func (s *tabEventSink) Emit(e event.Event) {
 	// Persist after each turn so a force-kill loses at most the in-flight prompt.
 	if e.Kind == event.TurnDone && s.app != nil {
 		s.app.scheduleTabSnapshot(s.tabID)
+	}
+}
+
+func (s *tabEventSink) setContext(ctx context.Context) {
+	s.mu.Lock()
+	s.ctx = ctx
+	s.mu.Unlock()
+}
+
+func (s *tabEventSink) clearContext() {
+	s.mu.Lock()
+	s.ctx = nil
+	s.mu.Unlock()
+	s.runtimeEvents.Clear()
+}
+
+func (s *tabEventSink) context() context.Context {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ctx
+}
+
+func (s *tabEventSink) emitRuntimeEvent(name string, payload ...interface{}) {
+	if s == nil {
+		return
+	}
+	ctx := s.context()
+	if ctx == nil {
+		return
+	}
+	s.runtimeEvents.Emit(ctx, name, payload...)
+}
+
+type runtimeEventEmitFunc func(context.Context, string, ...interface{})
+
+type runtimeEventEnvelope struct {
+	ctx     context.Context
+	name    string
+	payload []interface{}
+}
+
+// asyncRuntimeEmitter decouples Wails' runtime event bridge from agent
+// emission. runtime.EventsEmit can block when the single webview event channel
+// backs up; callers enqueue in-order work and return without holding the
+// agent's event.Sync lock.
+type asyncRuntimeEmitter struct {
+	mu      sync.Mutex
+	emit    runtimeEventEmitFunc
+	queue   []runtimeEventEnvelope
+	head    int
+	running bool
+}
+
+func (e *asyncRuntimeEmitter) Emit(ctx context.Context, name string, payload ...interface{}) {
+	if ctx == nil {
+		return
+	}
+	item := runtimeEventEnvelope{
+		ctx:     ctx,
+		name:    name,
+		payload: append([]interface{}(nil), payload...),
+	}
+	e.mu.Lock()
+	e.queue = append(e.queue, item)
+	if !e.running {
+		e.running = true
+		go e.run()
+	}
+	e.mu.Unlock()
+}
+
+func (e *asyncRuntimeEmitter) Clear() {
+	e.mu.Lock()
+	clear(e.queue)
+	e.queue = nil
+	e.head = 0
+	e.mu.Unlock()
+}
+
+func (e *asyncRuntimeEmitter) run() {
+	for {
+		e.mu.Lock()
+		if e.head >= len(e.queue) {
+			clear(e.queue)
+			e.queue = nil
+			e.head = 0
+			e.running = false
+			e.mu.Unlock()
+			return
+		}
+		item := e.queue[e.head]
+		var zero runtimeEventEnvelope
+		e.queue[e.head] = zero
+		e.head++
+		if e.head > 64 && e.head*2 >= len(e.queue) {
+			e.queue = append([]runtimeEventEnvelope(nil), e.queue[e.head:]...)
+			e.head = 0
+		}
+		emit := e.emit
+		if emit == nil {
+			emit = runtime.EventsEmit
+		}
+		e.mu.Unlock()
+
+		emit(item.ctx, item.name, item.payload...)
 	}
 }
 
@@ -514,13 +619,13 @@ func (s *tabEventSink) recordReadTelemetry(e event.Event) {
 		return
 	}
 	s.app.mu.RLock()
-	tab, ok := s.app.tabs[s.tabID]
+	tab := s.app.tabByEventSinkIDLocked(s.tabID)
 	var ctrl *control.Controller
-	if ok && tab != nil {
+	if tab != nil {
 		ctrl = tab.Ctrl
 	}
 	s.app.mu.RUnlock()
-	if !ok || tab == nil {
+	if tab == nil {
 		return
 	}
 	turn := 0
@@ -600,13 +705,13 @@ func (s *tabEventSink) telemetryTab() (*WorkspaceTab, string) {
 		return nil, ""
 	}
 	s.app.mu.RLock()
-	tab, ok := s.app.tabs[s.tabID]
+	tab := s.app.tabByEventSinkIDLocked(s.tabID)
 	var ctrl *control.Controller
-	if ok && tab != nil {
+	if tab != nil {
 		ctrl = tab.Ctrl
 	}
 	s.app.mu.RUnlock()
-	if !ok || tab == nil {
+	if tab == nil {
 		return nil, ""
 	}
 	if ctrl == nil {
@@ -1069,6 +1174,7 @@ func (a *App) indexedBlankTopicIDLocked(scope, workspaceRoot string) string {
 		}
 		openTopics[tab.TopicID] = true
 	}
+	sessionIndex, _ := topicSessionIndexForDir(config.SessionDir())
 	for _, topicID := range topicIDs {
 		if openTopics[topicID] {
 			continue
@@ -1076,7 +1182,7 @@ func (a *App) indexedBlankTopicIDLocked(scope, workspaceRoot string) string {
 		if topicTitleForTab(scope, workspaceRoot, topicID) != defaultTopicTitle {
 			continue
 		}
-		if findTopicSession(config.SessionDir(), topicID) != "" {
+		if topicSessionIndexHasTopic(sessionIndex, topicID) {
 			continue
 		}
 		return topicID
@@ -1182,7 +1288,7 @@ func (a *App) CloseTab(tabID string) error {
 		tab.Ctrl.Close()
 	}
 	if tab.sink != nil {
-		tab.sink.ctx = nil // stop further emissions (nil ctx → Emit becomes no-op)
+		tab.sink.clearContext() // stop further emissions (nil ctx -> Emit becomes no-op)
 	}
 	return nil
 }
@@ -1244,7 +1350,7 @@ func (a *App) buildTabController(tab *WorkspaceTab) {
 	a.mu.Unlock()
 
 	if tab.sink != nil {
-		tab.sink.ctx = wailsCtx
+		tab.sink.setContext(wailsCtx)
 	}
 
 	sessionDir := desktopSessionDir(root)
@@ -1439,9 +1545,9 @@ func (a *App) ctrlByTabID(tabID string) *control.Controller {
 
 func (a *App) scheduleTabSnapshot(tabID string) {
 	a.mu.RLock()
-	tab, ok := a.tabs[tabID]
+	tab := a.tabByEventSinkIDLocked(tabID)
 	a.mu.RUnlock()
-	if !ok {
+	if tab == nil {
 		return
 	}
 	tab.saveMu.Lock()
@@ -2495,27 +2601,38 @@ func migrateLegacySessionsIntoGlobalTopics(dir string) []string {
 	}
 	legacyMigrationMu.Lock()
 	defer legacyMigrationMu.Unlock()
-	infos, err := agent.ListSessions(dir)
+	infos, err := agent.ListSessionOrder(dir)
 	if err != nil || len(infos) == 0 {
 		return nil
 	}
-	titles := loadSessionTitles(dir)
-	topicTitles := loadTopicTitles(topicTitleRoot)
-	topicSources := loadTopicTitleSources(topicTitleRoot)
-	f := loadProjectsFile()
 
 	var migratedTopicIDs []string
+	var titles map[string]string
+	var topicTitles map[string]string
+	var topicSources map[string]string
 	for _, info := range infos {
 		if strings.TrimSpace(info.TopicID) != "" {
+			continue
+		}
+		if meta, ok, err := agent.LoadBranchMeta(info.Path); err != nil {
+			continue
+		} else if ok && (meta.Scope != "" || strings.TrimSpace(meta.WorkspaceRoot) != "" || strings.TrimSpace(meta.TopicID) != "") {
 			continue
 		}
 		topicID := legacySessionTopicID(info.Path)
 		if topicID == "" {
 			continue
 		}
+		preview, turns := agent.SessionPreview(info.Path)
+		if turns == 0 {
+			continue
+		}
+		if titles == nil {
+			titles = loadSessionTitles(dir)
+		}
 		title := strings.TrimSpace(titles[filepath.Base(info.Path)])
 		if title == "" {
-			title = topicTitleFromText(info.Preview)
+			title = topicTitleFromText(preview)
 		} else if normalized := topicTitleFromText(title); normalized != "" {
 			title = normalized
 		}
@@ -2547,6 +2664,12 @@ func migrateLegacySessionsIntoGlobalTopics(dir string) []string {
 		if err := agent.SaveBranchMetaPreserveUpdated(info.Path, meta); err != nil {
 			continue
 		}
+		if topicTitles == nil {
+			topicTitles = loadTopicTitles(topicTitleRoot)
+		}
+		if topicSources == nil {
+			topicSources = loadTopicTitleSources(topicTitleRoot)
+		}
 		if strings.TrimSpace(topicTitles[topicID]) == "" {
 			topicTitles[topicID] = title
 			topicSources[topicID] = topicTitleSourceManual
@@ -2556,6 +2679,7 @@ func migrateLegacySessionsIntoGlobalTopics(dir string) []string {
 	if len(migratedTopicIDs) == 0 {
 		return nil
 	}
+	f := loadProjectsFile()
 	if scope == "global" {
 		f.GlobalTopics = uniqueStrings(append(migratedTopicIDs, f.GlobalTopics...))
 	} else {
@@ -2568,8 +2692,13 @@ func migrateLegacySessionsIntoGlobalTopics(dir string) []string {
 		}
 	}
 	_ = saveProjectsFile(f)
-	_ = saveTopicTitles(topicTitleRoot, topicTitles)
-	_ = saveTopicTitleSources(topicTitleRoot, topicSources)
+	if topicTitles != nil {
+		_ = saveTopicTitles(topicTitleRoot, topicTitles)
+	}
+	if topicSources != nil {
+		_ = saveTopicTitleSources(topicTitleRoot, topicSources)
+	}
+	invalidateTopicSessionIndex(dir)
 	return migratedTopicIDs
 }
 
@@ -2643,7 +2772,11 @@ func restoreSessionTopicIndex(dir, sessionPath string) error {
 	if err := saveProjectsFile(f); err != nil {
 		return err
 	}
-	return agent.SaveBranchMetaPreserveUpdated(sessionPath, meta)
+	if err := agent.SaveBranchMetaPreserveUpdated(sessionPath, meta); err != nil {
+		return err
+	}
+	invalidateTopicSessionIndexForPath(sessionPath)
+	return nil
 }
 
 func restoredSessionTopicTitle(dir, sessionPath string, meta agent.BranchMeta) string {
@@ -2941,20 +3074,15 @@ func (a *App) updateTopicSessionTitles(topicID, title string) {
 		return
 	}
 	for _, dir := range a.knownSessionDirs() {
-		infos, err := agent.ListSessions(dir)
-		if err != nil {
-			continue
-		}
-		for _, info := range infos {
-			if info.TopicID != topicID {
-				continue
-			}
-			meta, ok, err := agent.LoadBranchMeta(info.Path)
+		for _, match := range topicSessionMatches(dir, topicID) {
+			meta, ok, err := agent.LoadBranchMeta(match.path)
 			if err != nil || !ok {
 				continue
 			}
 			meta.TopicTitle = title
-			_ = agent.SaveBranchMetaPreserveUpdated(info.Path, meta)
+			if err := agent.SaveBranchMetaPreserveUpdated(match.path, meta); err == nil {
+				invalidateTopicSessionIndex(dir)
+			}
 		}
 	}
 }
@@ -2979,9 +3107,14 @@ func (a *App) emitProjectTreeChanged() {
 		a.projectTreeChangedHook()
 		return
 	}
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "project-tree:changed")
+	a.emitRuntimeEvent("project-tree:changed")
+}
+
+func (a *App) emitRuntimeEvent(name string, payload ...interface{}) {
+	if a == nil || a.ctx == nil {
+		return
 	}
+	a.runtimeEvents.Emit(a.ctx, name, payload...)
 }
 
 // DeleteTopic removes a topic and its title metadata.
@@ -3784,7 +3917,11 @@ func saveTabSessionMeta(tab *WorkspaceTab, path string) error {
 	m.WorkspaceRoot = tab.WorkspaceRoot
 	m.TopicID = tab.TopicID
 	m.TopicTitle = tab.TopicTitle
-	return agent.SaveBranchMetaPreserveUpdated(path, m)
+	if err := agent.SaveBranchMetaPreserveUpdated(path, m); err != nil {
+		return err
+	}
+	invalidateTopicSessionIndexForPath(path)
+	return nil
 }
 
 func canonicalTabSessionPath(path string) string {
@@ -3855,14 +3992,11 @@ func (a *App) knownSessionDirs() []string {
 	return out
 }
 
-func topicSessionInfoMatchesTarget(info agent.SessionInfo, scope, workspaceRoot, topicID string) bool {
-	if strings.TrimSpace(info.TopicID) != strings.TrimSpace(topicID) {
-		return false
-	}
+func topicSessionMatchMatchesTarget(match topicSessionMatch, scope, workspaceRoot string) bool {
 	if scope == "project" {
-		return info.Scope == "project" && normalizeProjectRoot(info.WorkspaceRoot) == normalizeProjectRoot(workspaceRoot)
+		return match.scope == "project" && normalizeProjectRoot(match.workspaceRoot) == normalizeProjectRoot(workspaceRoot)
 	}
-	return info.Scope == "" || info.Scope == "global"
+	return match.scope == "" || match.scope == "global"
 }
 
 func (a *App) findTopicSessionForTarget(scope, workspaceRoot, topicID string) (string, string) {
@@ -3874,53 +4008,199 @@ func (a *App) findTopicSessionForTarget(scope, workspaceRoot, topicID string) (s
 	var bestDir string
 	var bestTime time.Time
 	for _, dir := range a.knownSessionDirs() {
-		infos, err := agent.ListSessions(dir)
-		if err != nil {
-			continue
-		}
-		for _, info := range infos {
-			if !topicSessionInfoMatchesTarget(info, scope, workspaceRoot, topicID) {
+		for _, match := range topicSessionMatches(dir, topicID) {
+			if !topicSessionMatchMatchesTarget(match, scope, workspaceRoot) {
 				continue
 			}
-			if bestPath == "" || info.LastActivityAt.After(bestTime) ||
-				(info.LastActivityAt.Equal(bestTime) && info.Path < bestPath) {
-				bestPath = info.Path
+			if bestPath == "" || match.updatedAt.After(bestTime) ||
+				(match.updatedAt.Equal(bestTime) && match.path < bestPath) {
+				bestPath = match.path
 				bestDir = dir
-				bestTime = info.LastActivityAt
+				bestTime = match.updatedAt
 			}
 		}
 	}
 	return bestPath, bestDir
 }
 
-// findTopicSession scans the session directory for a .jsonl file whose .meta
-// carries the given topicID. Returns the most recently updated match, or ""
-// if no session exists for this topic.
-func findTopicSession(dir, topicID string) string {
-	if topicID == "" || dir == "" {
+type topicSessionFileSignature struct {
+	name    string
+	size    int64
+	modTime int64
+}
+
+type topicSessionMatch struct {
+	path          string
+	updatedAt     time.Time
+	scope         string
+	workspaceRoot string
+}
+
+type topicSessionDirIndex struct {
+	signature []topicSessionFileSignature
+	byTopic   map[string][]topicSessionMatch
+}
+
+var topicSessionIndexCache = struct {
+	sync.Mutex
+	byDir map[string]topicSessionDirIndex
+}{byDir: map[string]topicSessionDirIndex{}}
+
+func topicSessionDirKey(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
 		return ""
 	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
+}
+
+func topicSessionDirSnapshot(dir string) ([]topicSessionFileSignature, []string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return ""
+		return nil, nil, err
 	}
-	var bestPath string
-	var bestTime time.Time
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
+	signature := []topicSessionFileSignature{}
+	sessionNames := []string{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() {
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
+		isSession := filepath.Ext(name) == ".jsonl"
+		isMeta := strings.HasSuffix(name, ".jsonl.meta")
+		if !isSession && !isMeta {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		signature = append(signature, topicSessionFileSignature{
+			name:    name,
+			size:    info.Size(),
+			modTime: info.ModTime().UnixNano(),
+		})
+		if isSession {
+			sessionNames = append(sessionNames, name)
+		}
+	}
+	sort.Slice(signature, func(i, j int) bool {
+		return signature[i].name < signature[j].name
+	})
+	sort.Strings(sessionNames)
+	return signature, sessionNames, nil
+}
+
+func topicSessionSignaturesEqual(a, b []topicSessionFileSignature) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func topicSessionIndexForDir(dir string) (topicSessionDirIndex, error) {
+	key := topicSessionDirKey(dir)
+	if key == "" {
+		return topicSessionDirIndex{}, nil
+	}
+	signature, sessionNames, err := topicSessionDirSnapshot(key)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return topicSessionDirIndex{}, nil
+		}
+		return topicSessionDirIndex{}, err
+	}
+	topicSessionIndexCache.Lock()
+	cached, ok := topicSessionIndexCache.byDir[key]
+	if ok && topicSessionSignaturesEqual(cached.signature, signature) {
+		topicSessionIndexCache.Unlock()
+		return cached, nil
+	}
+	topicSessionIndexCache.Unlock()
+
+	index := topicSessionDirIndex{
+		signature: signature,
+		byTopic:   map[string][]topicSessionMatch{},
+	}
+	for _, name := range sessionNames {
+		path := filepath.Join(key, name)
 		meta, ok, err := agent.LoadBranchMeta(path)
 		if err != nil || !ok {
 			continue
 		}
-		if meta.TopicID != topicID {
+		topicID := strings.TrimSpace(meta.TopicID)
+		if topicID == "" {
 			continue
 		}
-		if meta.UpdatedAt.After(bestTime) {
-			bestTime = meta.UpdatedAt
-			bestPath = path
+		index.byTopic[topicID] = append(index.byTopic[topicID], topicSessionMatch{
+			path:          path,
+			updatedAt:     meta.UpdatedAt,
+			scope:         meta.DefaultScope(),
+			workspaceRoot: meta.WorkspaceRoot,
+		})
+	}
+
+	topicSessionIndexCache.Lock()
+	topicSessionIndexCache.byDir[key] = index
+	topicSessionIndexCache.Unlock()
+	return index, nil
+}
+
+func topicSessionIndexHasTopic(index topicSessionDirIndex, topicID string) bool {
+	matches := index.byTopic[strings.TrimSpace(topicID)]
+	return len(matches) > 0
+}
+
+func topicSessionMatches(dir, topicID string) []topicSessionMatch {
+	index, err := topicSessionIndexForDir(dir)
+	if err != nil {
+		return nil
+	}
+	matches := index.byTopic[strings.TrimSpace(topicID)]
+	if len(matches) == 0 {
+		return nil
+	}
+	return append([]topicSessionMatch(nil), matches...)
+}
+
+func invalidateTopicSessionIndex(dir string) {
+	key := topicSessionDirKey(dir)
+	if key == "" {
+		return
+	}
+	topicSessionIndexCache.Lock()
+	delete(topicSessionIndexCache.byDir, key)
+	topicSessionIndexCache.Unlock()
+}
+
+func invalidateTopicSessionIndexForPath(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	invalidateTopicSessionIndex(filepath.Dir(path))
+}
+
+// findTopicSession returns the most recently updated .jsonl file whose .meta
+// carries the given topicID, using a directory-level sidecar index cache.
+func findTopicSession(dir, topicID string) string {
+	if topicID == "" || dir == "" {
+		return ""
+	}
+	var bestPath string
+	var bestTime time.Time
+	for _, match := range topicSessionMatches(dir, topicID) {
+		if match.updatedAt.After(bestTime) {
+			bestTime = match.updatedAt
+			bestPath = match.path
 		}
 	}
 	return bestPath

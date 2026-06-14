@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -511,6 +512,52 @@ func TestResolveModelPreservesProviderEffort(t *testing.T) {
 	}
 }
 
+func TestEffectiveVisionForOfficialMimoModels(t *testing.T) {
+	c := Default()
+	c.Desktop.ProviderAccess = []string{"mimo-api"}
+	normalizeDesktopOfficialProviderAccess(c)
+
+	pro, ok := c.ResolveModel("mimo-api/mimo-v2.5-pro")
+	if !ok {
+		t.Fatal("ResolveModel did not find mimo-api/mimo-v2.5-pro")
+	}
+	if EffectiveVision(pro) {
+		t.Fatalf("mimo-v2.5-pro should remain text-only by default")
+	}
+
+	vision, ok := c.ResolveModel("mimo-api/mimo-v2.5")
+	if !ok {
+		t.Fatal("ResolveModel did not find mimo-api/mimo-v2.5")
+	}
+	if !EffectiveVision(vision) {
+		t.Fatalf("mimo-v2.5 on the official MiMo API should enable vision")
+	}
+
+	omni, ok := c.ResolveModel("mimo-api/mimo-v2-omni")
+	if !ok {
+		t.Fatal("ResolveModel did not find mimo-api/mimo-v2-omni")
+	}
+	if !EffectiveVision(omni) {
+		t.Fatalf("mimo-v2-omni on the official MiMo API should enable vision")
+	}
+}
+
+func TestEffectiveVisionDoesNotInferCustomMimoProxy(t *testing.T) {
+	custom := &ProviderEntry{
+		Name:    "mimo-proxy",
+		Kind:    "openai",
+		BaseURL: "https://proxy.example.com/v1",
+		Model:   "mimo-v2.5",
+	}
+	if EffectiveVision(custom) {
+		t.Fatalf("custom MiMo proxy should require explicit vision=true")
+	}
+	custom.Vision = true
+	if !EffectiveVision(custom) {
+		t.Fatalf("explicit vision=true should still enable custom providers")
+	}
+}
+
 func TestRemoveProvider(t *testing.T) {
 	c := Default()
 	c.Agent.PlannerModel = "deepseek-pro"
@@ -726,6 +773,23 @@ func TestBuiltInMCPDefaultsEnableOnlyTime(t *testing.T) {
 	c := Default()
 	if !c.BuiltInMCP.TimeEnabled || c.BuiltInMCP.Context7Enabled {
 		t.Fatalf("built-in MCP defaults = %+v, want time enabled and context7 disabled", c.BuiltInMCP)
+	}
+}
+
+func TestBuiltInMCPUpdateDefaultsAreNotifyOnly(t *testing.T) {
+	c := Default()
+	if got := c.BuiltInMCPUpdates.ResolvedMode(); got != BuiltInMCPUpdateModeNotify {
+		t.Fatalf("builtin MCP update mode = %q, want notify", got)
+	}
+	if got := c.BuiltInMCPUpdates.CheckIntervalDuration(); got != 24*time.Hour {
+		t.Fatalf("builtin MCP update interval = %v, want 24h", got)
+	}
+	invalid := BuiltInMCPUpdatesConfig{Mode: "surprise", CheckInterval: "-1s"}
+	if got := invalid.ResolvedMode(); got != BuiltInMCPUpdateModeNotify {
+		t.Fatalf("invalid mode resolved to %q, want notify", got)
+	}
+	if got := invalid.CheckIntervalDuration(); got != 24*time.Hour {
+		t.Fatalf("invalid interval resolved to %v, want 24h", got)
 	}
 }
 
