@@ -44,6 +44,7 @@ config/personas/SOUL.md
 config/personas/MEMORY.md
 config/personas/memory_operations.yaml
 skills/bilibili/cookie.txt
+tools/bilibili/cookie.txt
 output/bilibili/
 config/personas/memory.yaml
 *.lock
