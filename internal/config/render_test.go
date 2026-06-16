@@ -73,6 +73,7 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.Agent.SubagentModel = "mimo-pro"
 	orig.Agent.SubagentModels = map[string]string{"review": "deepseek-pro"}
 	orig.Tools.BashTimeoutSeconds = intPtr(900)
+	orig.Tools.BackgroundJobs.StalledWarningSeconds = intPtr(30)
 	orig.Permissions = PermissionsConfig{
 		Mode:  "deny",
 		Deny:  []string{"Bash(rm -rf*)"},
@@ -271,6 +272,9 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	if got.Tools.BashTimeoutSeconds == nil || *got.Tools.BashTimeoutSeconds != 900 {
 		t.Errorf("tools.bash_timeout_seconds = %v, want 900", got.Tools.BashTimeoutSeconds)
+	}
+	if got.Tools.BackgroundJobs.StalledWarningSeconds == nil || *got.Tools.BackgroundJobs.StalledWarningSeconds != 30 {
+		t.Errorf("tools.background_jobs.stalled_warning_seconds = %v, want 30", got.Tools.BackgroundJobs.StalledWarningSeconds)
 	}
 	if g, _ := got.Provider("mimo-pro"); g == nil || g.BaseURL != "http://localhost:8000/v1" || g.ReasoningProtocol != "openai" {
 		t.Errorf("mimo-pro base_url not preserved: %+v", g)
