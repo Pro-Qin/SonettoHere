@@ -40,7 +40,7 @@ const LEGACY_STYLE_MAP: Record<string, ThemeStyle> = {
 };
 
 const DEFAULT_THEME_STYLE: ThemeStyle = "graphite";
-const DEFAULT_THEME: Theme = "light";
+const DEFAULT_THEME: Theme = "auto";
 
 const THEME_KEY = "reasonix-theme";
 const STYLE_KEY = "reasonix-theme-style";
