@@ -56,9 +56,7 @@ func TestCancelClearsPendingApprovalRuntimeStatus(t *testing.T) {
 
 	c.Cancel()
 	c.Cancel()
-	if st := c.RuntimeStatus(); !st.Running || st.PendingPrompt || !st.Cancellable || !st.CancelRequested {
-		t.Fatalf("status immediately after cancel = %+v, want running cancelling without pending prompt", st)
-	}
+	assertCancelClearedPendingRuntimeStatus(t, c.RuntimeStatus())
 	waitTurnDoneEvent(t, done)
 	if st := c.RuntimeStatus(); st.Running || st.PendingPrompt || st.Cancellable || st.CancelRequested {
 		t.Fatalf("status after turn done = %+v, want idle", st)
@@ -90,12 +88,26 @@ func TestCancelClearsPendingAskRuntimeStatus(t *testing.T) {
 	}
 
 	c.Cancel()
-	if st := c.RuntimeStatus(); !st.Running || st.PendingPrompt || !st.Cancellable || !st.CancelRequested {
-		t.Fatalf("status immediately after cancel = %+v, want running cancelling without pending prompt", st)
-	}
+	assertCancelClearedPendingRuntimeStatus(t, c.RuntimeStatus())
 	waitTurnDoneEvent(t, done)
 	if st := c.RuntimeStatus(); st.Running || st.PendingPrompt || st.Cancellable || st.CancelRequested {
 		t.Fatalf("status after turn done = %+v, want idle", st)
+	}
+}
+
+func assertCancelClearedPendingRuntimeStatus(t *testing.T, st RuntimeStatus) {
+	t.Helper()
+	if st.PendingPrompt {
+		t.Fatalf("status immediately after cancel = %+v, want pending prompt cleared", st)
+	}
+	if st.Running {
+		if !st.Cancellable || !st.CancelRequested {
+			t.Fatalf("status immediately after cancel = %+v, want running cancelling without pending prompt", st)
+		}
+		return
+	}
+	if st.Cancellable || st.CancelRequested {
+		t.Fatalf("status immediately after cancel = %+v, want idle when turn already completed", st)
 	}
 }
 
