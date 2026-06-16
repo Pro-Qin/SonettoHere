@@ -282,7 +282,6 @@ export interface AppBindings {
   ListTabs(): Promise<TabMeta[]>;
   OpenProjectTab(workspaceRoot: string, topicID: string): Promise<TabMeta>;
   OpenGlobalTab(topicID: string): Promise<TabMeta>;
-  OpenTopicSession(scope: string, workspaceRoot: string, topicID: string, sessionPath: string): Promise<TabMeta>;
   EnsureBlankTab(scope: string, workspaceRoot: string): Promise<TabMeta>;
   SetActiveTab(tabID: string): Promise<void>;
   ReorderTabs(tabIDs: string[]): Promise<void>;
@@ -2729,7 +2728,6 @@ function makeMockApp(): AppBindings {
         gitBranch: "main",
         topicId: _topicID,
         topicTitle: topicLabel(_topicID, t("mock.newSession")),
-        sessionPath: `/mock/sessions/${_topicID}.jsonl`,
         projectColor: mockProjectTree.find((node) => node.root === workspaceRoot)?.projectColor,
         label: "deepseek-v4-flash",
         ready: true,
@@ -2758,7 +2756,6 @@ function makeMockApp(): AppBindings {
         workspacePath: cwd,
         topicId: _topicID,
         topicTitle: topicLabel(_topicID, "Global"),
-        sessionPath: `/mock/sessions/${_topicID}.jsonl`,
         label: "deepseek-v4-flash",
         ready: true,
         running: false,
@@ -2771,14 +2768,6 @@ function makeMockApp(): AppBindings {
       };
       mockTabs = [...mockTabs.map((item) => ({ ...item, active: false })), tab];
       return { ...tab };
-    },
-    async OpenTopicSession(scope: string, workspaceRoot: string, topicID: string, sessionPath: string) {
-      const tab = scope === "project"
-        ? await this.OpenProjectTab(workspaceRoot, topicID)
-        : await this.OpenGlobalTab(topicID);
-      const active = { ...tab, sessionPath };
-      mockTabs = mockTabs.map((item) => (item.id === tab.id ? active : item));
-      return { ...active };
     },
     async EnsureBlankTab(scope: string, workspaceRoot: string) {
       const targetScope = scope === "project" && workspaceRoot ? "project" : "global";

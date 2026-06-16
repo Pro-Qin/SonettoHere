@@ -493,9 +493,6 @@ func botDomainOrDefault(domain string) string {
 // keys are account-level, not per-project: writing them to the global config
 // rather than the cwd's reasonix.toml is what lets them survive a workspace switch.
 func (a *App) applyConfigChange(mutate func(*config.Config) error) error {
-	if err := a.ensureActiveTabRebuildAllowed("settings"); err != nil {
-		return err
-	}
 	cfg, path, err := a.loadDesktopUserConfigForEdit()
 	if err != nil {
 		return err
@@ -518,20 +515,6 @@ func (a *App) applyConfigOnly(mutate func(*config.Config) error) error {
 		return err
 	}
 	return cfg.SaveTo(path)
-}
-
-func (a *App) ensureActiveTabRebuildAllowed(setting string) error {
-	if a.ctx == nil {
-		return nil
-	}
-	tab := a.activeTab()
-	if tab == nil {
-		return fmt.Errorf("no active tab")
-	}
-	if controllerHasActiveRuntimeWork(tab.Ctrl) {
-		return rebuildControllerActiveWorkError(setting)
-	}
-	return nil
 }
 
 func (a *App) loadDesktopUserConfigForEdit() (*config.Config, string, error) {
@@ -691,9 +674,6 @@ func (a *App) rebuild() error {
 	tab := a.activeTab()
 	if tab == nil {
 		return fmt.Errorf("no active tab")
-	}
-	if controllerHasActiveRuntimeWork(tab.Ctrl) {
-		return rebuildControllerActiveWorkError("settings")
 	}
 	var carried []provider.Message
 	prevPath := ""
@@ -1170,9 +1150,9 @@ func (a *App) removeBuiltInProviderAccessAndRetargetTabs(name string) error {
 			if !desktopModelRefsProvider(cfg, ref, name) {
 				continue
 			}
-			if controllerHasActiveRuntimeWork(tab.Ctrl) {
+			if tab.Ctrl != nil && tab.Ctrl.Running() {
 				a.mu.RUnlock()
-				return fmt.Errorf("finish or cancel active work using %q before removing the provider access", name)
+				return fmt.Errorf("finish or cancel conversations using %q before removing the provider access", name)
 			}
 			affected = append(affected, providerRemovalTab{id: id, ctrl: tab.Ctrl, readOnly: tab.ReadOnly})
 		}
@@ -1246,9 +1226,9 @@ func (a *App) deleteProviderAndRetargetTabs(name string) error {
 		if !desktopModelRefsProvider(cfg, ref, name) {
 			continue
 		}
-		if controllerHasActiveRuntimeWork(tab.Ctrl) {
+		if tab.Ctrl != nil && tab.Ctrl.Running() {
 			a.mu.RUnlock()
-			return fmt.Errorf("finish or cancel active work using %q before deleting the provider", name)
+			return fmt.Errorf("finish or cancel conversations using %q before deleting the provider", name)
 		}
 		affected = append(affected, providerRemovalTab{id: id, ctrl: tab.Ctrl, readOnly: tab.ReadOnly})
 	}
@@ -1309,9 +1289,6 @@ func (a *App) SetProviderKey(apiKeyEnv, value string) error {
 	if strings.TrimSpace(apiKeyEnv) == "" {
 		return fmt.Errorf("this provider has no api_key_env set")
 	}
-	if err := a.ensureActiveTabRebuildAllowed("provider key"); err != nil {
-		return err
-	}
 	if err := upsertDotEnv(apiKeyEnv, value); err != nil {
 		return err
 	}
@@ -1323,9 +1300,6 @@ func (a *App) SetProviderKey(apiKeyEnv, value string) error {
 func (a *App) ClearProviderKey(apiKeyEnv string) error {
 	if strings.TrimSpace(apiKeyEnv) == "" {
 		return fmt.Errorf("this provider has no api_key_env set")
-	}
-	if err := a.ensureActiveTabRebuildAllowed("provider key"); err != nil {
-		return err
 	}
 	if err := removeDotEnv(apiKeyEnv); err != nil {
 		return err

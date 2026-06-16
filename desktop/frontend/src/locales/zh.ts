@@ -564,7 +564,6 @@ export const zh: Record<DictKey, string> = {
   "projectTree.status.thinking": "思考中",
   "projectTree.status.streaming": "输出中",
   "projectTree.status.waitingConfirmation": "待确认",
-  "projectTree.status.backgroundJob": "后台任务",
   "projectTree.status.paused": "已暂停",
   "projectTree.status.error": "异常",
   "projectTree.removeProject": "移出侧边栏",

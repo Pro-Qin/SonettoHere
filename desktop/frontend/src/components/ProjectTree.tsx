@@ -18,7 +18,6 @@ interface ProjectTreeProps {
   activeScope?: string;
   activeWorkspaceRoot?: string;
   activeTopicId?: string;
-  activeSessionPath?: string;
   imTopicSources?: Record<string, ProjectTreeImTopicSource>;
   variant?: "classic" | "workbench";
   onOpenTopic: (scope: string, workspaceRoot: string, topicId: string, sessionPath?: string) => Promise<void> | void;
@@ -43,35 +42,8 @@ function projectNodeKey(node: ProjectNode, depth: number): string {
   return node.key || `${node.kind}-${node.root ?? ""}-${node.topicId ?? ""}-${depth}`;
 }
 
-function isRuntimeSessionNode(node: ProjectNode): boolean {
-  return node.kind === "session" || node.kind === "global_session";
-}
-
-function isTopicNode(node: ProjectNode): boolean {
-  return node.kind === "topic" || node.kind === "global_topic";
-}
-
-export type ProjectTreeTopicOpenRequest = {
-  scope: "global" | "project";
-  workspaceRoot: string;
-  topicId: string;
-  sessionPath?: string;
-};
-
-export function projectTreeTopicOpenRequest(node: ProjectNode): ProjectTreeTopicOpenRequest | null {
-  if (!isTopicNode(node) && !isRuntimeSessionNode(node)) return null;
-  const scope = node.kind === "global_topic" || node.kind === "global_session" ? "global" : "project";
-  return {
-    scope,
-    workspaceRoot: scope === "global" ? "" : node.root ?? "",
-    topicId: node.topicId ?? "",
-    sessionPath: node.sessionPath,
-  };
-}
-
-function topicIsActive(node: ProjectNode, activeScope?: string, activeWorkspaceRoot?: string, activeTopicId?: string, activeSessionPath?: string): boolean {
-  if (!isTopicNode(node) && !isRuntimeSessionNode(node)) return false;
-  if (node.sessionPath) return Boolean(activeSessionPath && activeSessionPath === node.sessionPath);
+function topicIsActive(node: ProjectNode, activeScope?: string, activeWorkspaceRoot?: string, activeTopicId?: string): boolean {
+  if (node.kind !== "topic" && node.kind !== "global_topic") return false;
   const scope = node.kind === "global_topic" ? "global" : "project";
   return (
     activeTopicId === node.topicId &&
@@ -94,14 +66,13 @@ const topicStatusLabels: Record<ProjectTopicStatus, DictKey> = {
   thinking: "projectTree.status.thinking",
   streaming: "projectTree.status.streaming",
   waiting_confirmation: "projectTree.status.waitingConfirmation",
-  background_job: "projectTree.status.backgroundJob",
   paused: "projectTree.status.paused",
   error: "projectTree.status.error",
 };
 
 function normalizeTopicStatus(status?: string): ProjectTopicStatus | "" {
   if (!status) return "";
-  if (status === "thinking" || status === "streaming" || status === "waiting_confirmation" || status === "background_job" || status === "paused" || status === "error") {
+  if (status === "thinking" || status === "streaming" || status === "waiting_confirmation" || status === "paused" || status === "error") {
     return status;
   }
   return "";
@@ -225,22 +196,6 @@ function collapsibleFolderKeys(nodes: ProjectNode[], depth = 0): string[] {
       keys.push(projectNodeKey(node, depth));
     }
     keys.push(...collapsibleFolderKeys(children, depth + 1));
-  }
-  return keys;
-}
-
-export function defaultExpandedProjectTreeKeys(nodes: ProjectNode[], depth = 0): string[] {
-  const keys: string[] = [];
-  for (const node of nodes) {
-    if (!node) continue;
-    const children = asArray(node.children);
-    if ((node.kind === "project" || node.kind === "global_folder") && children.length > 0) {
-      keys.push(projectNodeKey(node, depth));
-    }
-    if (isTopicNode(node) && children.some(isRuntimeSessionNode)) {
-      keys.push(projectNodeKey(node, depth));
-    }
-    keys.push(...defaultExpandedProjectTreeKeys(children, depth + 1));
   }
   return keys;
 }
@@ -394,7 +349,6 @@ export function ProjectTree({
   activeScope,
   activeWorkspaceRoot,
   activeTopicId,
-  activeSessionPath,
   imTopicSources = {},
   variant = "classic",
   onOpenTopic,
@@ -462,8 +416,8 @@ export function ProjectTree({
       setExpanded((prev) => {
         const next = new Set(prev);
         const collapsed = manuallyCollapsedRef.current;
-        for (const key of defaultExpandedProjectTreeKeys(list)) {
-          if (!collapsed.has(key)) next.add(key);
+        for (const node of list) {
+          if (node?.key && !collapsed.has(node.key)) next.add(node.key);
         }
         return next;
       });
@@ -889,7 +843,7 @@ export function ProjectTree({
     const walk = (nodes: ProjectNode[], ancestors: string[]): string[] | null => {
       for (const node of nodes) {
         if (!node) continue;
-        if (topicIsActive(node, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath)) return ancestors;
+        if (topicIsActive(node, activeScope, activeWorkspaceRoot, activeTopicId)) return ancestors;
         const children = asArray(node.children);
         if (children.length > 0) {
           const next = walk(children, [...ancestors, projectNodeKey(node, ancestors.length)]);
@@ -899,7 +853,7 @@ export function ProjectTree({
       return null;
     };
     return walk(tree, []) ?? [];
-  }, [activeScope, activeSessionPath, activeTopicId, activeWorkspaceRoot, tree]);
+  }, [activeScope, activeTopicId, activeWorkspaceRoot, tree]);
 
   useEffect(() => {
     if (activeAncestorKeys.length === 0) return;
@@ -922,13 +876,11 @@ export function ProjectTree({
     const isExpanded = query.trim() ? true : expanded.has(key);
     const hasChildren = children.length > 0;
 
-    if (isTopicNode(node) || isRuntimeSessionNode(node)) {
-      const isSessionNode = isRuntimeSessionNode(node);
-      const openRequest = projectTreeTopicOpenRequest(node);
-      const scope = openRequest?.scope ?? "project";
+    if (node.kind === "topic" || node.kind === "global_topic") {
+      const scope = node.kind === "global_topic" ? "global" : "project";
       const scopeClass = scope === "global" ? " project-tree__topic--global" : " project-tree__topic--project";
       const accentStyle = projectAccentStyle(node.projectColor, scope === "global" ? "var(--project-tree-global-accent)" : undefined);
-      const active = topicIsActive(node, activeScope, activeWorkspaceRoot, activeTopicId, activeSessionPath);
+      const active = topicIsActive(node, activeScope, activeWorkspaceRoot, activeTopicId);
       const label = (node.label || node.topicId || "Untitled").replace(/^●\s*/, "");
       const activityAt = node.lastActivityAt || node.createdAt || 0;
       const timeLabel = compactTopics && activityAt ? topicActivityLabel(activityAt, t, true) : "";
@@ -947,7 +899,6 @@ export function ProjectTree({
       const pinned = Boolean(node.pinned);
       const pinLabel = t(pinned ? "projectTree.unpinTopic" : "projectTree.pinTopic");
       const openTopicMenu = (event: ReactMouseEvent<HTMLElement> | ReactKeyboardEvent<HTMLElement>) => {
-        if (isSessionNode) return;
         event.preventDefault();
         event.stopPropagation();
         setMenuProject(null);
@@ -984,7 +935,7 @@ export function ProjectTree({
           },
         },
       ];
-      if (!isSessionNode && editingTopic === topicId) {
+      if (editingTopic === topicId) {
         return (
           <div
             key={key}
@@ -1005,20 +956,18 @@ export function ProjectTree({
           </div>
         );
       }
-      const row = (
+      return (
         <div
           className={`project-tree__topic${scopeClass}${isSessionNode ? " project-tree__topic--session" : ""}${active ? " project-tree__topic--active" : ""}${node.running ? " project-tree__topic--running" : ""}${status ? ` project-tree__topic--status-${status}` : ""}${!isSessionNode && pinned ? " project-tree__topic--pinned" : ""}${topicMenuOpen ? " project-tree__topic--menu-open" : ""}${compactTopics && (timeLabel || showStatusInSide) ? " project-tree__topic--with-side" : meta ? " project-tree__topic--has-meta" : ""}${imSource ? " project-tree__topic--im-source" : ""}`}
           style={accentStyle}
-          onContextMenu={isSessionNode ? undefined : openTopicMenu}
+          onContextMenu={openTopicMenu}
         >
           <button
             type="button"
             className="project-tree__topic-main"
             title={title}
             style={{ paddingLeft: 14 + depth * 16 }}
-            onClick={() => {
-              if (openRequest) onOpenTopic(openRequest.scope, openRequest.workspaceRoot, openRequest.topicId, openRequest.sessionPath);
-            }}
+            onClick={() => onOpenTopic(scope, node.root ?? "", topicId)}
             onKeyDown={(event) => {
               if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
                 openTopicMenu(event);

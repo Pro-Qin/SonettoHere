@@ -156,11 +156,10 @@ export interface TabMeta {
 
 export interface ProjectNode {
   key: string;
-  kind: "project" | "topic" | "session" | "global_folder" | "global_topic" | "global_session";
+  kind: "project" | "topic" | "global_folder" | "global_topic";
   label: string;
   root?: string;
   topicId?: string;
-  sessionPath?: string;
   projectColor?: string;
   turns?: number;
   createdAt?: number;
@@ -172,7 +171,7 @@ export interface ProjectNode {
   children?: ProjectNode[];
 }
 
-export type ProjectTopicStatus = "thinking" | "streaming" | "waiting_confirmation" | "background_job" | "paused" | "error";
+export type ProjectTopicStatus = "thinking" | "streaming" | "waiting_confirmation" | "paused" | "error";
 
 export interface TopicMeta {
   id: string;

@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,9 @@ import (
 	"reasonix/internal/control"
 	"reasonix/internal/fileutil"
 )
+
+// errActiveSession is returned when a delete targets the session in use.
+var errActiveSession = errors.New("can't delete the session you're in — start a new one first")
 
 // sessions.go holds the desktop-only session-management state that the shared
 // kernel doesn't model: custom display titles. A session on disk is just a JSONL
@@ -119,7 +123,7 @@ func trashSessionArtifacts(dir, sessionPath, key string) error {
 	return trashSessionArtifactsBeforeMove(dir, sessionPath, key, nil)
 }
 
-func validateSessionTrashTarget(dir, sessionPath, key string) error {
+func trashSessionArtifactsBeforeMove(dir, sessionPath, key string, beforeMove func()) error {
 	if _, err := os.Stat(sessionPath); os.IsNotExist(err) {
 		return nil
 	} else if err != nil {
@@ -131,19 +135,6 @@ func validateSessionTrashTarget(dir, sessionPath, key string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return nil
-}
-
-func trashSessionArtifactsBeforeMove(dir, sessionPath, key string, beforeMove func()) error {
-	if err := validateSessionTrashTarget(dir, sessionPath, key); err != nil {
-		return err
-	}
-	if _, err := os.Stat(sessionPath); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	itemDir := filepath.Join(sessionTrashPath(dir), key)
 	if err := os.MkdirAll(itemDir, 0o755); err != nil {
 		return err
 	}

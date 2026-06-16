@@ -2089,6 +2089,7 @@ export default function App() {
       rewind(turn, scope).then(() => {
         refreshTabMetas();
         setProjectRevision((v) => v + 1);
+        setTabRevealSignal((v) => v + 1);
       });
       return;
     }
@@ -2134,18 +2135,17 @@ export default function App() {
     setRewindSignal((v) => v + 1);
   }, [activeTab?.readOnly, state.items, rewind, refreshTabMetas, setComposerInsertRequest]);
 
-  const handleOpenTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string, sessionPath?: string) => {
+  const handleOpenTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string) => {
     closeTransientOverlays();
     setSidebarImDetailConnectionId("");
-    if (sessionPath) {
-      await openTopicSession(scope, workspaceRoot, topicId, sessionPath);
-    } else if (scope === "global") {
+    if (scope === "global") {
       await openGlobalTab(topicId);
     } else {
       await openProjectTab(workspaceRoot, topicId);
     }
     await refreshTabMetas();
-  }, [closeTransientOverlays, openGlobalTab, openProjectTab, openTopicSession, refreshTabMetas]);
+    setTabRevealSignal((signal) => signal + 1);
+  }, [closeTransientOverlays, openGlobalTab, openProjectTab, refreshTabMetas]);
 
   const openSidebarImConnectionSession = useCallback(async (connection: SidebarImConnection) => {
     const target = sidebarImSessionTarget(connection);
@@ -2168,6 +2168,7 @@ export default function App() {
       }
       await refreshTabMetas();
       setProjectRevision((value) => value + 1);
+      setTabRevealSignal((signal) => signal + 1);
     } catch (err) {
       console.warn("bot sidebar open failed", err);
       showToast(t("sidebar.imOpenFailed", { name: connection.title }));
@@ -2233,6 +2234,7 @@ export default function App() {
           await resumeSession(session.path, targetTab.id);
         }
         await refreshTabMetas();
+        setTabRevealSignal((signal) => signal + 1);
       } catch (err: any) {
         setHistView(null);
         if (scope === "project" && session.workspaceRoot) {
@@ -2632,7 +2634,6 @@ export default function App() {
               activeScope={activeTab?.scope}
               activeWorkspaceRoot={activeTab?.workspaceRoot}
               activeTopicId={activeTab?.topicId}
-              activeSessionPath={activeTab?.sessionPath}
               imTopicSources={imTopicSources}
               onOpenTopic={handleOpenTopic}
               onOpenProjectHistory={openProjectHistory}
