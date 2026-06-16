@@ -87,7 +87,7 @@ make cross      # -> dist/（darwin|linux|windows × amd64|arm64）
 ```sh
 reasonix setup                      # 配置向导 → ./reasonix.toml
 export DEEPSEEK_API_KEY=sk-...      # 也可以让 setup 保存到凭据存储
-reasonix chat                       # 然后在会话里运行 /init 生成 AGENTS.md（项目记忆）
+reasonix                            # 然后在会话里运行 /init 生成 AGENTS.md（项目记忆）
 reasonix run "把 main.go 里的 TODO 实现掉"
 reasonix run --model mimo-pro "给这个函数补单元测试"
 echo "解释这段代码" | reasonix run

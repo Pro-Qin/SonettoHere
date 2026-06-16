@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -172,6 +171,72 @@ func TestRunDispatchesACPLongFlagAlias(t *testing.T) {
 	}
 	if strings.Contains(errOut, "unknown command") {
 		t.Fatalf("--acp should not be treated as an unknown command:\n%s", errOut)
+	}
+}
+
+func TestRunDefaultsToInteractiveSession(t *testing.T) {
+	isolateCLIConfigHome(t)
+
+	prev := runInteractiveSession
+	t.Cleanup(func() { runInteractiveSession = prev })
+
+	var gotArgs []string
+	runInteractiveSession = func(args []string) int {
+		gotArgs = append([]string(nil), args...)
+		return 17
+	}
+
+	if rc := Run(nil, "test-version"); rc != 17 {
+		t.Fatalf("Run(nil) rc = %d, want 17", rc)
+	}
+	if gotArgs != nil {
+		t.Fatalf("interactive args = %#v, want nil", gotArgs)
+	}
+}
+
+func TestRunRoutesBareInteractiveFlagsToSession(t *testing.T) {
+	isolateCLIConfigHome(t)
+
+	prev := runInteractiveSession
+	t.Cleanup(func() { runInteractiveSession = prev })
+
+	var gotArgs []string
+	runInteractiveSession = func(args []string) int {
+		gotArgs = append([]string(nil), args...)
+		return 23
+	}
+
+	args := []string{"--continue"}
+	if rc := Run(args, "test-version"); rc != 23 {
+		t.Fatalf("Run(--continue) rc = %d, want 23", rc)
+	}
+	if !reflect.DeepEqual(gotArgs, args) {
+		t.Fatalf("interactive args = %#v, want %#v", gotArgs, args)
+	}
+}
+
+func TestRunKeepsChatAndCodeCompatibilityAliases(t *testing.T) {
+	isolateCLIConfigHome(t)
+
+	prev := runInteractiveSession
+	t.Cleanup(func() { runInteractiveSession = prev })
+
+	var calls [][]string
+	runInteractiveSession = func(args []string) int {
+		calls = append(calls, append([]string(nil), args...))
+		return 0
+	}
+
+	if rc := Run([]string{"chat", "--resume"}, "test-version"); rc != 0 {
+		t.Fatalf("Run(chat --resume) rc = %d, want 0", rc)
+	}
+	if rc := Run([]string{"code", "--continue"}, "test-version"); rc != 0 {
+		t.Fatalf("Run(code --continue) rc = %d, want 0", rc)
+	}
+
+	want := [][]string{{"--resume"}, {"--continue"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("interactive calls = %#v, want %#v", calls, want)
 	}
 }
 
@@ -360,18 +425,6 @@ func TestConfigReasoningLanguageRejectsAliases(t *testing.T) {
 	})
 	if !strings.Contains(errOut, "must be auto|zh|en") {
 		t.Fatalf("config reasoning-language alias stderr = %q", errOut)
-	}
-}
-
-func TestWelcomePromptMissingKeysRequiresConfigSource(t *testing.T) {
-	if welcomeShouldPromptMissingKeys("", nil) {
-		t.Fatal("built-in defaults without a config source should not prompt for missing provider keys")
-	}
-	if welcomeShouldPromptMissingKeys("reasonix.toml", errors.New("bad config")) {
-		t.Fatal("invalid config should not enter the missing-key prompt path")
-	}
-	if !welcomeShouldPromptMissingKeys("reasonix.toml", nil) {
-		t.Fatal("valid config source should enter the missing-key prompt path")
 	}
 }
 

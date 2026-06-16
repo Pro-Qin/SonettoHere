@@ -91,7 +91,7 @@ make cross      # -> dist/ (darwin|linux|windows × amd64|arm64)
 ```sh
 reasonix setup                      # config wizard → ./reasonix.toml
 export DEEPSEEK_API_KEY=sk-...      # or let setup save it to the credential store
-reasonix chat                       # then run /init to generate AGENTS.md (project memory)
+reasonix                            # then run /init to generate AGENTS.md (project memory)
 reasonix run "implement the TODOs in main.go"
 reasonix run --model mimo-pro "add unit tests for this function"
 echo "explain this code" | reasonix run
