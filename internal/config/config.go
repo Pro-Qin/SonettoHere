@@ -1067,13 +1067,18 @@ func clonePricing(p *provider.Pricing) *provider.Pricing {
 
 // ToolsConfig selects which built-in tools are enabled. Empty means all of them.
 type ToolsConfig struct {
-	Enabled            []string     `toml:"enabled"`
-	BashTimeoutSeconds *int         `toml:"bash_timeout_seconds"`
-	Search             SearchConfig `toml:"search"`
-	Shell              ShellConfig  `toml:"shell"`
+	Enabled            []string             `toml:"enabled"`
+	BashTimeoutSeconds *int                 `toml:"bash_timeout_seconds"`
+	BackgroundJobs     BackgroundJobsConfig `toml:"background_jobs"`
+	Search             SearchConfig         `toml:"search"`
+	Shell              ShellConfig          `toml:"shell"`
 }
 
-const defaultBashTimeoutSeconds = 120
+const (
+	defaultBashTimeoutSeconds             = 120
+	defaultBackgroundJobStalledWarningSec = 900
+	maxBackgroundJobStalledWarningSec     = 86400
+)
 
 // BashTimeoutSeconds returns the foreground bash timeout in seconds. An omitted
 // config keeps the historical 120s safety cap, explicit 0 disables the
@@ -1084,6 +1089,25 @@ func (c *Config) BashTimeoutSeconds() int {
 		return defaultBashTimeoutSeconds
 	}
 	return *c.Tools.BashTimeoutSeconds
+}
+
+// BackgroundJobsConfig tunes parent-created background jobs.
+type BackgroundJobsConfig struct {
+	StalledWarningSeconds *int `toml:"stalled_warning_seconds"`
+}
+
+// BackgroundJobStalledWarningSeconds returns the stalled warning threshold in
+// seconds. Omitted/negative values keep the default, explicit 0 disables the
+// notice, and oversized values clamp to one day so a typo cannot become
+// effectively invisible.
+func (c *Config) BackgroundJobStalledWarningSeconds() int {
+	if c.Tools.BackgroundJobs.StalledWarningSeconds == nil || *c.Tools.BackgroundJobs.StalledWarningSeconds < 0 {
+		return defaultBackgroundJobStalledWarningSec
+	}
+	if *c.Tools.BackgroundJobs.StalledWarningSeconds > maxBackgroundJobStalledWarningSec {
+		return maxBackgroundJobStalledWarningSec
+	}
+	return *c.Tools.BackgroundJobs.StalledWarningSeconds
 }
 
 // SearchConfig tunes the grep tool's engine. Engine is "auto" (default — use
