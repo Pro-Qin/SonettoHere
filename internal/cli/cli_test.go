@@ -178,7 +178,12 @@ func TestRunDefaultsToInteractiveSession(t *testing.T) {
 	isolateCLIConfigHome(t)
 
 	prev := runInteractiveSession
-	t.Cleanup(func() { runInteractiveSession = prev })
+	prevInteractive := cliIsInteractive
+	t.Cleanup(func() {
+		runInteractiveSession = prev
+		cliIsInteractive = prevInteractive
+	})
+	cliIsInteractive = func() bool { return true }
 
 	var gotArgs []string
 	runInteractiveSession = func(args []string) int {
@@ -194,24 +199,57 @@ func TestRunDefaultsToInteractiveSession(t *testing.T) {
 	}
 }
 
+func TestRunNoArgsNonInteractivePrintsUsage(t *testing.T) {
+	isolateCLIConfigHome(t)
+
+	prev := runInteractiveSession
+	prevInteractive := cliIsInteractive
+	t.Cleanup(func() {
+		runInteractiveSession = prev
+		cliIsInteractive = prevInteractive
+	})
+	cliIsInteractive = func() bool { return false }
+	runInteractiveSession = func(args []string) int {
+		t.Fatalf("non-interactive no-arg Run should not start session with %#v", args)
+		return 99
+	}
+
+	out := captureStdout(t, func() {
+		if rc := Run(nil, "test-version"); rc != 0 {
+			t.Fatalf("Run(nil) rc = %d, want 0", rc)
+		}
+	})
+	if !strings.Contains(out, "reasonix —") || !strings.Contains(out, "reasonix run") {
+		t.Fatalf("non-interactive no-arg Run should print usage, got:\n%s", out)
+	}
+}
+
 func TestRunRoutesBareInteractiveFlagsToSession(t *testing.T) {
 	isolateCLIConfigHome(t)
 
 	prev := runInteractiveSession
 	t.Cleanup(func() { runInteractiveSession = prev })
 
-	var gotArgs []string
-	runInteractiveSession = func(args []string) int {
-		gotArgs = append([]string(nil), args...)
-		return 23
-	}
+	for _, args := range [][]string{
+		{"--continue"},
+		{"--continue=true"},
+		{"-c=true"},
+		{"--resume=true"},
+		{"--yolo=true"},
+		{"--dangerously-skip-permissions=true"},
+	} {
+		var gotArgs []string
+		runInteractiveSession = func(args []string) int {
+			gotArgs = append([]string(nil), args...)
+			return 23
+		}
 
-	args := []string{"--continue"}
-	if rc := Run(args, "test-version"); rc != 23 {
-		t.Fatalf("Run(--continue) rc = %d, want 23", rc)
-	}
-	if !reflect.DeepEqual(gotArgs, args) {
-		t.Fatalf("interactive args = %#v, want %#v", gotArgs, args)
+		if rc := Run(args, "test-version"); rc != 23 {
+			t.Fatalf("Run(%#v) rc = %d, want 23", args, rc)
+		}
+		if !reflect.DeepEqual(gotArgs, args) {
+			t.Fatalf("interactive args = %#v, want %#v", gotArgs, args)
+		}
 	}
 }
 

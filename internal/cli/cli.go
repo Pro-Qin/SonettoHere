@@ -37,7 +37,10 @@ import (
 	"golang.org/x/term"
 )
 
-var runInteractiveSession = chatREPL
+var (
+	runInteractiveSession = chatREPL
+	cliIsInteractive      = isInteractive
+)
 
 // Run is the CLI entry point; it returns a process exit code.
 func Run(args []string, version string) int {
@@ -64,8 +67,13 @@ func Run(args []string, version string) int {
 		}
 	}
 
-	if len(args) == 0 {
+	if len(args) == 0 && cliIsInteractive() {
 		return runInteractiveSession(nil)
+	}
+	if len(args) == 0 {
+		configureCLIThemeFromConfigForTTYOutput()
+		usage()
+		return 0
 	}
 	if cmd == "" {
 		return runInteractiveSession(args)
@@ -127,10 +135,8 @@ func isDefaultInteractiveFlag(arg string) bool {
 	case "--model", "--max-steps", "--continue", "-c", "--resume", "--dangerously-skip-permissions", "--yolo", "--dir":
 		return true
 	}
-	for _, prefix := range []string{"--model=", "--max-steps=", "--dir="} {
-		if strings.HasPrefix(arg, prefix) {
-			return true
-		}
+	if name, _, ok := strings.Cut(arg, "="); ok && isDefaultInteractiveFlag(name) {
+		return true
 	}
 	return false
 }
