@@ -32,6 +32,9 @@ Reasonix 会优先尝试系统密钥库；如果 keyring 不可用，再 fallbac
 设置 `credentials_store = "file"` 可始终使用文件 fallback。`REASONIX_CREDENTIALS_STORE`
 可在 CI、测试或便携安装中覆盖该模式。
 
+setup 向导、桌面端或 CLI 缺 key 提示保存的新 API key 都会写入上面的凭据存储。
+项目 `.env` 仍会优先读取，用于兼容旧项目或用户主动做项目级覆盖；但 Reasonix 不会把新密钥写入项目 `.env`。
+
 缓存仍放在系统缓存目录，例如 macOS 的 `~/Library/Caches/reasonix`、
 Linux 的 `$XDG_CACHE_HOME/reasonix` 或 `~/.cache/reasonix`、Windows 的
 `%LOCALAPPDATA%\reasonix\cache`。可以设置 `REASONIX_CACHE_HOME` 覆盖缓存根目录。

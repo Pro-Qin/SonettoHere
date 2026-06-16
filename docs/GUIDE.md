@@ -30,7 +30,9 @@ built-in defaults**. Starting with **Reasonix v1.8.1**, the user config lives at
 [Configuration paths](./CONFIG_PATHS.md) for migration and related data paths.
 Secrets come from the environment via `api_key_env` and are never stored in
 config files. Credentials default to `credentials_store = "auto"`, which prefers
-the OS credential store and falls back to the file under Reasonix home.
+the OS credential store and falls back to the file under Reasonix home. New keys
+saved by Reasonix are not written to a project `.env`; project `.env` files are
+only read for compatibility and explicit per-project overrides.
 
 For the desktop and CLI usage of visible reasoning language, see
 [Reasoning language](./REASONING_LANGUAGE.md).

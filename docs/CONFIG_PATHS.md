@@ -36,6 +36,11 @@ Reasonix tries the OS credential store first and falls back to
 `credentials_store = "file"` to always use the file fallback. `REASONIX_CREDENTIALS_STORE`
 can override the mode for CI, tests, or portable installs.
 
+New API keys saved by the setup wizard, the desktop app, or an interactive
+missing-key prompt are written to the configured credential store above. Project
+`.env` files are still loaded first for compatibility and deliberate per-project
+overrides, but Reasonix does not write new keys into a project `.env`.
+
 Caches remain in the OS cache directory, for example
 `~/Library/Caches/reasonix` on macOS, `$XDG_CACHE_HOME/reasonix` or
 `~/.cache/reasonix` on Linux, and `%LOCALAPPDATA%\reasonix\cache` on Windows.

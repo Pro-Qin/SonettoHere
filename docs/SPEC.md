@@ -438,7 +438,9 @@ at `~/.reasonix/config.toml` on macOS/Linux and
 Secrets come from the environment via `api_key_env` and are never stored in
 config files. `credentials_store = "auto"` prefers the OS credential store and
 falls back to the file under Reasonix home. A `.env` in the working directory is
-loaded if present. Step-limit preferences usually belong in the user config;
+loaded if present for compatibility and explicit per-project overrides, but
+Reasonix-created API keys are written to the configured credential store rather
+than a project `.env`. Step-limit preferences usually belong in the user config;
 project `reasonix.toml` should override them only when the repository needs
 shared runtime bounds.
 

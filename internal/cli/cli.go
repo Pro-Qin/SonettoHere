@@ -932,8 +932,9 @@ func familyStaticModels(providers []config.ProviderEntry, idxs []int) []string {
 
 // ensureProbeKey prompts once for the family's API key when it isn't already in
 // the environment, so the /models probe can run and return the live SKU list.
-// The value is set in the env for the probe; configureKeys persists it to .env
-// later and skips re-asking. A blank entry is fine — the static fallback covers it.
+// The value is set in the env for the probe; configureKeys returns the same key
+// for the credential store later and skips re-asking. A blank entry is fine —
+// the static fallback covers it.
 func ensureProbeKey(probe *config.ProviderEntry, famName string) {
 	if probe.APIKeyEnv == "" || os.Getenv(probe.APIKeyEnv) != "" {
 		return
@@ -1169,7 +1170,7 @@ func promptCustomProviderManual() ([]config.ProviderEntry, error) {
 // Pre-filled values (baseURL, keyEnv, apiKey) are reused as-is when non-empty
 // so the URL-fetch flow can fall through to manual entry without re-asking
 // the user for information they've already typed. An empty apiKey is allowed
-// — the key step happens later in the wizard and .env is updated then.
+// — the key step happens later in the wizard and the credential store is updated then.
 func promptCustomProviderManualWith(in *bufio.Scanner, baseURL, keyEnv, apiKey string) ([]config.ProviderEntry, error) {
 	fmt.Println()
 	if baseURL == "" {
@@ -1474,8 +1475,8 @@ func providersWithMissingKeys(cfg *config.Config) []config.ProviderEntry {
 // environment. For every distinct api_key_env: if the variable is already set,
 // setup asks whether to re-enter it; Enter keeps and re-pins the existing value.
 // Otherwise the user is asked once per env var (deduped across providers that
-// share one, e.g. both DeepSeek models). Returns KEY=value lines to append to
-// .env. Re-pinning matters because loadDotEnv is first-wins, so a stale key left
+// share one, e.g. both DeepSeek models). Returns KEY=value lines for the
+// configured credential store. Re-pinning matters because loadDotEnv is first-wins, so a stale key left
 // earlier in the credentials file would otherwise keep shadowing the fresh value.
 func configureKeys(selected []config.ProviderEntry, r io.Reader, w io.Writer) []string {
 	in := bufio.NewScanner(r)
@@ -1620,8 +1621,8 @@ func welcome(version string) int {
 		if rc := interactiveSetup(defaultConfigTarget(), defaultEnvTarget()); rc != 0 {
 			return rc
 		}
-		// Config just written; reload so .env (and any pinned language) is
-		// picked up. If the chosen provider's key is ready, drop into chat.
+		// Config just written; reload so the credential store (and any pinned
+		// language) is picked up. If the chosen provider's key is ready, drop into chat.
 		if cfg, err := config.Load(); err == nil && cfg.Validate(cfg.DefaultModel) == nil {
 			if cfg.Language != "" {
 				i18n.DetectLanguage(cfg.Language)
