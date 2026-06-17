@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -780,7 +781,11 @@ func (m *Manager) SetActiveSessionPath(parentSession, sessionPath string) {
 	m.mu.Unlock()
 
 	if oldDir != "" && newDir != "" && oldDir != newDir {
-		if err := migrateArtifactDir(oldDir, newDir); err != nil {
+		oldSession := parentSession
+		if adoptDefault {
+			oldSession = ""
+		}
+		if err := m.migrateArtifactDirForSession(oldSession, oldDir, newDir); err != nil {
 			if adoptDefault {
 				m.mu.Lock()
 				m.adoptUnscopedJobsLocked(parentSession)
@@ -792,7 +797,6 @@ func (m *Manager) SetActiveSessionPath(parentSession, sessionPath string) {
 			if adoptDefault {
 				m.adoptUnscopedJobsLocked(parentSession)
 			}
-			m.rebaseSessionArtifactsLocked(parentSession, newDir)
 			m.mu.Unlock()
 		}
 	}
@@ -880,6 +884,127 @@ func (m *Manager) recordArtifactMigrationError(parentSession string, err error) 
 	m.mu.Unlock()
 	if active == "" || active == parentSession {
 		m.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: text})
+	}
+}
+
+type artifactMigrationJob struct {
+	job     *Job
+	wasOpen bool
+}
+
+func (m *Manager) migrateArtifactDirForSession(parentSession, oldDir, newDir string) error {
+	locked := m.lockArtifactJobsForMigration(parentSession, oldDir)
+	defer unlockArtifactMigrationJobs(locked)
+	closeErr := closeArtifactMigrationFiles(locked)
+	migrateErr := migrateArtifactDir(oldDir, newDir)
+	reopenDir := oldDir
+	if migrateErr == nil {
+		rebaseArtifactMigrationJobs(locked, newDir)
+		reopenDir = newDir
+	}
+	if reopenErr := reopenArtifactMigrationFiles(locked, reopenDir); reopenErr != nil {
+		return joinJobError(closeErr, joinJobError(migrateErr, reopenErr))
+	}
+	return joinJobError(closeErr, migrateErr)
+}
+
+func (m *Manager) lockArtifactJobsForMigration(parentSession, dir string) []artifactMigrationJob {
+	parentSession = strings.TrimSpace(parentSession)
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	m.mu.Lock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		if j == nil || strings.TrimSpace(j.SessionID) != parentSession {
+			continue
+		}
+		jobs = append(jobs, j)
+	}
+	m.mu.Unlock()
+	sort.Slice(jobs, func(i, k int) bool {
+		return jobs[i].ID < jobs[k].ID
+	})
+	locked := make([]artifactMigrationJob, 0, len(jobs))
+	for _, j := range jobs {
+		j.mu.Lock()
+		if !artifactPathInDir(j.artifactPath, dir) {
+			j.mu.Unlock()
+			continue
+		}
+		locked = append(locked, artifactMigrationJob{job: j, wasOpen: j.artifactFile != nil})
+	}
+	return locked
+}
+
+func artifactPathInDir(path, dir string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if path == "." || dir == "." {
+		return false
+	}
+	return filepath.Dir(path) == dir
+}
+
+func closeArtifactMigrationFiles(jobs []artifactMigrationJob) error {
+	var err error
+	for _, item := range jobs {
+		j := item.job
+		if j == nil || j.artifactFile == nil {
+			continue
+		}
+		if closeErr := j.artifactFile.Close(); closeErr != nil {
+			j.artifactErr = closeErr.Error()
+			j.artifactComplete = false
+			err = joinJobError(err, fmt.Errorf("close %s: %w", j.ID, closeErr))
+		}
+		j.artifactFile = nil
+	}
+	return err
+}
+
+func rebaseArtifactMigrationJobs(jobs []artifactMigrationJob, dir string) {
+	for _, item := range jobs {
+		j := item.job
+		if j == nil {
+			continue
+		}
+		if j.artifactPath != "" {
+			j.artifactPath = filepath.Join(dir, filepath.Base(j.artifactPath))
+		}
+		if j.artifactMetaPath != "" {
+			j.artifactMetaPath = filepath.Join(dir, filepath.Base(j.artifactMetaPath))
+		}
+	}
+}
+
+func reopenArtifactMigrationFiles(jobs []artifactMigrationJob, dir string) error {
+	var err error
+	for _, item := range jobs {
+		j := item.job
+		if j == nil || !item.wasOpen {
+			continue
+		}
+		path := j.artifactPath
+		if path == "" {
+			path = filepath.Join(dir, j.ID+jobLogExt)
+			j.artifactPath = path
+		}
+		f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if openErr != nil {
+			j.artifactErr = openErr.Error()
+			j.artifactComplete = false
+			err = joinJobError(err, fmt.Errorf("reopen %s: %w", j.ID, openErr))
+			continue
+		}
+		j.artifactFile = f
+	}
+	return err
+}
+
+func unlockArtifactMigrationJobs(jobs []artifactMigrationJob) {
+	for i := len(jobs) - 1; i >= 0; i-- {
+		if jobs[i].job != nil {
+			jobs[i].job.mu.Unlock()
+		}
 	}
 }
 

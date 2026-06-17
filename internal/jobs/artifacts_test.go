@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"reasonix/internal/event"
@@ -103,6 +104,8 @@ func TestSetActiveSessionPathMigratesRunningJobArtifacts(t *testing.T) {
 
 	wroteBefore := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
 	j := m.StartForSession("session", "bash", "migrate", func(_ context.Context, out io.Writer) (string, error) {
 		_, _ = io.WriteString(out, "before\n")
 		close(wroteBefore)
@@ -120,7 +123,7 @@ func TestSetActiveSessionPathMigratesRunningJobArtifacts(t *testing.T) {
 		t.Fatalf("artifact path = %q, want under %q", gotPath, ArtifactDir(sessionPath))
 	}
 
-	close(release)
+	releaseOnce.Do(func() { close(release) })
 	<-j.done
 	res := m.WaitForSession(context.Background(), "session", []string{j.ID}, 1)
 	if len(res) != 1 || !strings.Contains(res[0].Output, "before\n") || !strings.Contains(res[0].Output, "after\n") {
