@@ -2155,7 +2155,7 @@ func (c *Controller) BeginDestroySession(sessionPath string) SessionDestroyHandl
 	teardown := c.jobs.BeginDestroySession(parentSession)
 	return SessionDestroyHandle{
 		Wait: func() jobs.TeardownResult {
-			return c.jobs.WaitTeardown(context.Background(), teardown, jobs.DefaultTeardownGrace)
+			return c.jobs.WaitTeardown(context.Background(), teardown, c.jobs.TeardownGrace())
 		},
 		WaitAll: func() {
 			for _, ch := range teardown.DoneChannels() {
@@ -2623,16 +2623,31 @@ func (c *Controller) InheritLifecycleFrom(prev *Controller) {
 // firing SessionEnd. Use it only when replacing the controller for the same
 // logical session.
 func (c *Controller) ReleaseResources() {
-	c.close(false)
+	c.close(false, closeJobsWithGrace)
 }
 
 // Close stops plugin subprocesses and releases resources. A session that ever
 // started fires SessionEnd so a teardown hook runs.
 func (c *Controller) Close() {
-	c.close(true)
+	c.close(true, closeJobsWithGrace)
 }
 
-func (c *Controller) close(fireSessionEnd bool) {
+// CloseAfterDestroy releases controller resources after the caller has already
+// begun session-specific job teardown. It avoids a second synchronous job grace
+// wait while still cancelling the manager root and reaping temporary artifacts
+// once every job goroutine finally exits.
+func (c *Controller) CloseAfterDestroy() {
+	c.close(true, closeJobsAsync)
+}
+
+type closeJobsMode int
+
+const (
+	closeJobsWithGrace closeJobsMode = iota
+	closeJobsAsync
+)
+
+func (c *Controller) close(fireSessionEnd bool, jobsMode closeJobsMode) {
 	c.mu.Lock()
 	started := c.startedOnce
 	c.mu.Unlock()
@@ -2640,7 +2655,12 @@ func (c *Controller) close(fireSessionEnd bool) {
 		c.hooks.SessionEnd(context.Background())
 	}
 	if c.jobs != nil {
-		c.jobs.Close() // cancel any still-running background jobs
+		switch jobsMode {
+		case closeJobsAsync:
+			c.jobs.CloseAsync()
+		default:
+			c.jobs.Close() // cancel any still-running background jobs
+		}
 	}
 	if c.cleanup != nil {
 		c.cleanup()

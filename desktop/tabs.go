@@ -3417,10 +3417,20 @@ func (a *App) TrashTopic(topicID string) error {
 		a.closeRemovedSessionRuntimes(removed)
 		return err
 	}
-	defer a.closeRemovedSessionRuntimes(removed)
+	destroyBegun := false
+	defer func() {
+		if destroyBegun {
+			a.closeRemovedSessionRuntimesAfterDestroy(removed)
+			return
+		}
+		a.closeRemovedSessionRuntimes(removed)
+	}()
 
 	for _, target := range targets {
 		destroys := a.destroyHandlesForSession(target.dir, target.sessionPath, removed)
+		if len(destroys) > 0 {
+			destroyBegun = true
+		}
 		if waitDestroyHandles(destroys) {
 			if err := agent.MarkCleanupPending(target.sessionPath, "delete"); err != nil {
 				return err

@@ -180,6 +180,9 @@ func WithTeardownGrace(d time.Duration) Option {
 	}
 }
 
+// TeardownGrace reports the manager's configured close/destroy wait window.
+func (m *Manager) TeardownGrace() time.Duration { return m.teardownGrace }
+
 // NewManager returns a Manager whose jobs run under a fresh session-scoped
 // context (cancelled by Close). sink receives job-lifecycle notices; pass the
 // session's synchronized sink (event.Sync) since jobs emit from goroutines.
@@ -1279,6 +1282,18 @@ func (m *Manager) purgeSessionLocked(parentSession string) {
 // background after the goroutines eventually unwind.
 func (m *Manager) Close() {
 	_ = m.CloseWithGrace(m.teardownGrace)
+}
+
+// CloseAsync cancels the manager and returns immediately. It is used when a
+// caller has already begun session-specific teardown and owns the delayed
+// persistent cleanup, but still needs the manager's root context and temporary
+// artifact root released eventually.
+func (m *Manager) CloseAsync() {
+	m.cancel()
+	go func() {
+		m.wg.Wait()
+		m.removeTempRoot()
+	}()
 }
 
 // CloseWithGrace is Close with an explicit wait window, used by tests and

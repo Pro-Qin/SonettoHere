@@ -806,13 +806,13 @@ func (s *service) sessionDelete(_ context.Context, raw json.RawMessage) (any, er
 		if result := destroy.Wait(); result.HasTimedOut() {
 			if err := agent.MarkCleanupPending(path, "delete"); err != nil {
 				go delayedDeleteSessionFiles(path, destroy)
-				sess.ctrl.Close()
+				sess.ctrl.CloseAfterDestroy()
 				return nil, &RPCError{Code: ErrInternal, Message: "session/delete: " + err.Error()}
 			}
 			go delayedDeleteSessionFiles(path, destroy)
 			delayed = true
 		}
-		sess.ctrl.Close()
+		sess.ctrl.CloseAfterDestroy()
 	}
 	if path == "" {
 		if dir := s.sessionDir(); dir != "" {

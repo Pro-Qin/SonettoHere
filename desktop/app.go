@@ -1062,7 +1062,7 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl *control.Cont
 		a.saveTabsLocked()
 	}
 	a.mu.Unlock()
-	oldCtrl.Close()
+	oldCtrl.CloseAfterDestroy()
 	a.emitProjectTreeChanged()
 	return nil
 }
@@ -1581,7 +1581,7 @@ func (a *App) DeleteSession(path string) error {
 	destroys := a.destroyHandlesForSession(dir, sessionPath, removed)
 	if waitDestroyHandles(destroys) {
 		if err := agent.MarkCleanupPending(sessionPath, "delete"); err != nil {
-			a.closeRemovedSessionRuntimes(removed)
+			a.closeRemovedSessionRuntimesAfterDestroy(removed)
 			return err
 		}
 		go delayedDesktopSessionTrash(dir, sessionPath, key, destroys)
@@ -1589,11 +1589,11 @@ func (a *App) DeleteSession(path string) error {
 		err = trashSessionArtifacts(dir, sessionPath, key)
 		finishDestroyHandles(destroys)
 		if err != nil {
-			a.closeRemovedSessionRuntimes(removed)
+			a.closeRemovedSessionRuntimesAfterDestroy(removed)
 			return err
 		}
 	}
-	a.closeRemovedSessionRuntimes(removed)
+	a.closeRemovedSessionRuntimesAfterDestroy(removed)
 	if fallback.needs {
 		if err := a.openFallbackRuntime(fallback); err != nil {
 			return err
@@ -1825,6 +1825,17 @@ func (a *App) closeRemovedSessionRuntimes(removed []removedSessionRuntime) {
 		}
 		seen[item.ctrl] = true
 		item.ctrl.Close()
+	}
+}
+
+func (a *App) closeRemovedSessionRuntimesAfterDestroy(removed []removedSessionRuntime) {
+	seen := map[*control.Controller]bool{}
+	for _, item := range removed {
+		if item.ctrl == nil || seen[item.ctrl] {
+			continue
+		}
+		seen[item.ctrl] = true
+		item.ctrl.CloseAfterDestroy()
 	}
 }
 
