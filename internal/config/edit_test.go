@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -211,6 +212,11 @@ func TestDesktopStatusBarItemsNormalizeAndValidate(t *testing.T) {
 	if got, want := Default().DesktopStatusBarItems(), DefaultDesktopStatusBarItems(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("default desktop status bar items = %v, want %v", got, want)
 	}
+	for _, id := range []string{"workspace", "git_branch"} {
+		if !slices.Contains(DefaultDesktopStatusBarItems(), id) {
+			t.Fatalf("default desktop status bar items must include configurable item %q", id)
+		}
+	}
 
 	c := Default()
 	c.Desktop.StatusBarItems = []string{" balance ", "cache", "cache", "unknown", "model"}
@@ -224,6 +230,14 @@ func TestDesktopStatusBarItemsNormalizeAndValidate(t *testing.T) {
 	}
 	if got, want := c.DesktopStatusBarItems(), []string{"balance", "cache", "model"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("saved desktop status bar items = %v, want %v", got, want)
+	}
+
+	c = Default()
+	if err := c.SetDesktopStatusBarItems([]string{"workspace", "git_branch", "model"}); err != nil {
+		t.Fatalf("SetDesktopStatusBarItems workspace metadata: %v", err)
+	}
+	if got, want := c.DesktopStatusBarItems(), []string{"workspace", "git_branch", "model"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("saved workspace metadata status bar items = %v, want %v", got, want)
 	}
 
 	if err := c.SetDesktopStatusBarItems(nil); err != nil {

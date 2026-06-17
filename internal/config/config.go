@@ -251,6 +251,8 @@ func (c *Config) DesktopStatusBarStyle() string {
 
 var defaultDesktopStatusBarItems = []string{
 	"model",
+	"workspace",
+	"git_branch",
 	"cache",
 	"cache_avg",
 	"session_tokens",
@@ -263,18 +265,14 @@ var defaultDesktopStatusBarItems = []string{
 	"balance",
 }
 
-var knownDesktopStatusBarItems = map[string]bool{
-	"model":          true,
-	"cache":          true,
-	"cache_avg":      true,
-	"session_tokens": true,
-	"turn_tokens":    true,
-	"turn_cost":      true,
-	"session_turns":  true,
-	"context":        true,
-	"compact":        true,
-	"cost":           true,
-	"balance":        true,
+var knownDesktopStatusBarItems = desktopStatusBarItemSet(defaultDesktopStatusBarItems)
+
+func desktopStatusBarItemSet(items []string) map[string]bool {
+	out := make(map[string]bool, len(items))
+	for _, item := range items {
+		out[item] = true
+	}
+	return out
 }
 
 // DefaultDesktopStatusBarItems returns the default ordered visible desktop
