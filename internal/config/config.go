@@ -58,7 +58,8 @@ type Config struct {
 	LSP              LSPConfig           `toml:"lsp"`
 	Bot              BotConfig           `toml:"bot"`
 
-	providerSources map[string]providerSourceScope
+	providerSources          map[string]providerSourceScope
+	shadowedProjectProviders []ProviderEntry
 }
 
 type providerSourceScope string
@@ -1473,11 +1474,12 @@ func LoadForRoot(root string) (*Config, error) {
 		return nil, err
 	}
 	cfg.Plugins = plugins
-	if providers, providerSources, ok, err := mergeTOMLProviders(tomlSources); err != nil {
+	if providers, providerSources, shadowedProjectProviders, ok, err := mergeTOMLProviders(tomlSources); err != nil {
 		return nil, err
 	} else if ok {
 		cfg.Providers = providers
 		cfg.providerSources = providerSources
+		cfg.shadowedProjectProviders = shadowedProjectProviders
 	}
 	if access, ok, err := mergeTOMLProviderAccess(tomlSources); err != nil {
 		return nil, err
@@ -1645,8 +1647,9 @@ func mergeTOMLPlugins(paths []string) ([]PluginEntry, error) {
 // only fill names the global config does not define. Keep official legacy aliases
 // distinct here: they can carry different default models and effort capabilities,
 // and the later desktop normalization layer handles canonical Settings access.
-func mergeTOMLProviders(paths []string) ([]ProviderEntry, map[string]providerSourceScope, bool, error) {
+func mergeTOMLProviders(paths []string) ([]ProviderEntry, map[string]providerSourceScope, []ProviderEntry, bool, error) {
 	var merged []ProviderEntry
+	var shadowedProject []ProviderEntry
 	index := map[string]int{}
 	sources := map[string]providerSourceScope{}
 	saw := false
@@ -1656,7 +1659,7 @@ func mergeTOMLProviders(paths []string) ([]ProviderEntry, map[string]providerSou
 		}
 		var f Config
 		if _, err := toml.DecodeFile(path, &f); err != nil {
-			return nil, nil, false, fmt.Errorf("config %s: %w", path, err)
+			return nil, nil, nil, false, fmt.Errorf("config %s: %w", path, err)
 		}
 		if len(f.Providers) == 0 {
 			continue
@@ -1668,8 +1671,11 @@ func mergeTOMLProviders(paths []string) ([]ProviderEntry, map[string]providerSou
 			key := providerMergeKey(p)
 			if i, ok := index[key]; ok {
 				if sources[key] == providerSourceProject && source == providerSourceUser {
+					shadowedProject = append(shadowedProject, merged[i])
 					merged[i] = p
 					sources[key] = source
+				} else if sources[key] == providerSourceUser && source == providerSourceProject {
+					shadowedProject = append(shadowedProject, p)
 				}
 				continue
 			} else {
@@ -1679,7 +1685,7 @@ func mergeTOMLProviders(paths []string) ([]ProviderEntry, map[string]providerSou
 			}
 		}
 	}
-	return merged, sources, saw, nil
+	return merged, sources, shadowedProject, saw, nil
 }
 
 func providerSourceForPath(path string) providerSourceScope {
@@ -1731,7 +1737,7 @@ func mergeTOMLProviderAccess(paths []string) ([]string, bool, error) {
 // of resetting to defaults. .env is loaded so api_key_env resolution works while
 // the wizard decides which keys are still missing.
 func LoadForEdit(path string) *Config {
-	cfg, err := loadForEditStrict(path)
+	cfg, err := loadForEditStrict(path, true)
 	if err == nil {
 		return cfg
 	}
@@ -1742,8 +1748,21 @@ func LoadForEdit(path string) *Config {
 	return cfg
 }
 
-func loadForEditStrict(path string) (*Config, error) {
-	loadDotEnvForEditPath(path)
+func LoadForEditWithoutCredentials(path string) *Config {
+	cfg, err := loadForEditStrict(path, false)
+	if err == nil {
+		return cfg
+	}
+	slog.Warn("config: load for edit failed, using defaults", "path", path, "err", err)
+	cfg = Default()
+	normalizeConfigForEdit(cfg)
+	return cfg
+}
+
+func loadForEditStrict(path string, loadCredentials bool) (*Config, error) {
+	if loadCredentials {
+		loadDotEnvForEditPath(path)
+	}
 	cfg := Default()
 	if _, err := os.Stat(path); err == nil {
 		if err := migrateLegacyMCPTiersFile(path); err != nil {
@@ -1956,7 +1975,7 @@ func normalizeDesktopOfficialProviderAccess(c *Config) {
 		if strings.TrimSpace(name) == "mimo-flash" {
 			includeMimoFlash = true
 		}
-		name = canonicalDesktopOfficialProviderName(name)
+		name = desktopProviderAccessNameForConfig(c, name)
 		if name == "" || seen[name] {
 			continue
 		}
@@ -1987,7 +2006,7 @@ func NormalizeLegacyDesktopProviderAccess(c *Config) {
 	seen := desktopProviderAccessMap(nil)
 	var access []string
 	add := func(name string) {
-		name = canonicalDesktopOfficialProviderName(name)
+		name = desktopProviderAccessNameForConfig(c, name)
 		if name == "" || seen[name] {
 			return
 		}
@@ -2035,6 +2054,40 @@ func canonicalDesktopOfficialProviderName(name string) string {
 	}
 }
 
+func desktopProviderAccessNameForConfig(c *Config, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	canonical := canonicalDesktopOfficialProviderName(name)
+	if canonical == name {
+		return name
+	}
+	if c == nil {
+		return canonical
+	}
+	if p, ok := c.Provider(name); ok && !providerEntryMatchesCanonicalOfficialAccess(p, canonical) {
+		return name
+	}
+	return canonical
+}
+
+func providerEntryMatchesCanonicalOfficialAccess(p *ProviderEntry, canonical string) bool {
+	if p == nil {
+		return false
+	}
+	switch canonical {
+	case "deepseek":
+		return officialProviderKind(p) == "deepseek"
+	case "mimo-api":
+		return isOfficialMimoAPIProvider(p)
+	case "mimo-token-plan":
+		return isOfficialMimoTokenPlanProvider(p)
+	default:
+		return false
+	}
+}
+
 // CanonicalDesktopOfficialProviderName returns the Settings Center provider ID
 // for built-in official provider aliases.
 func CanonicalDesktopOfficialProviderName(name string) string {
@@ -2044,7 +2097,7 @@ func CanonicalDesktopOfficialProviderName(name string) string {
 func desktopProviderAccessMap(names []string) map[string]bool {
 	out := map[string]bool{}
 	for _, name := range names {
-		name = canonicalDesktopOfficialProviderName(name)
+		name = strings.TrimSpace(name)
 		if name != "" {
 			out[name] = true
 		}

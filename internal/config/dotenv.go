@@ -9,42 +9,28 @@ import (
 
 // loadDotEnv loads KEY=value files into the process environment without
 // overriding variables that are already set (first file to set a key wins).
-// Order: a project ./.env (read-only back-compat, so a manual project override
-// takes precedence), then the configured Reasonix credential store (where
-// `reasonix setup` writes keys, so they resolve from any directory without ever
-// touching a project's own .env), then ~/.env as a legacy fallback. Existing
+// Order: configured Reasonix credential store (where `reasonix setup` writes
+// keys, so they resolve from any directory), then a project ./.env as a
+// read-only back-compat fallback, then ~/.env as a legacy fallback. Existing
 // environment variables always win over all credential sources.
 func loadDotEnv() {
 	loadDotEnvForRoot(".")
 }
 
-// loadDotEnvForRoot loads a root's .env file (if present) before the home .env
-// fallback. When root is "." it behaves like loadDotEnv().
+// loadDotEnvForRoot loads Reasonix global credentials before a root's .env file
+// (if present) and the home .env fallback. When root is "." it behaves like
+// loadDotEnv().
 func loadDotEnvForRoot(root string) {
 	dotEnvPath := ".env"
 	if root != "" && root != "." {
 		dotEnvPath = filepath.Join(root, ".env")
 	}
-	loadDotEnvFileAs(dotEnvPath, CredentialSource{Kind: CredentialSourceProjectEnv, Path: dotEnvPath})
 	loadCredentialStoreForRoot(root)
+	loadDotEnvFileAs(dotEnvPath, CredentialSource{Kind: CredentialSourceProjectEnv, Path: dotEnvPath})
 	if home, err := os.UserHomeDir(); err == nil {
 		homeEnv := filepath.Join(home, ".env")
 		loadDotEnvFileAs(homeEnv, CredentialSource{Kind: CredentialSourceHomeEnv, Path: homeEnv})
 	}
-}
-
-// LoadCredentialsForRoot loads the credential environment for a workspace root
-// without decoding or mutating the full runtime config. Existing environment
-// variables keep the same first-wins precedence as LoadForRoot.
-func LoadCredentialsForRoot(root string) {
-	loadDotEnvForRoot(root)
-}
-
-// LoadGlobalCredentials loads credentials referenced by the user-global config
-// from the system credential store or ~/.reasonix/credentials, without consulting
-// a project .env first.
-func LoadGlobalCredentials() {
-	loadGlobalCredentialStore()
 }
 
 func legacyCredentialsPaths() []string {
