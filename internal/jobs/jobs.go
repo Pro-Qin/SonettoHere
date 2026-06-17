@@ -508,8 +508,11 @@ func (m *Manager) OutputForSession(parentSession, id string) (text string, statu
 		text = j.result
 		j.resultRead = true
 	}
-	if text == "" && j.artifactErr != "" {
-		text = "job artifact incomplete: " + j.artifactErr
+	if j.artifactErr != "" {
+		if text != "" {
+			text += "\n"
+		}
+		text += "job artifact incomplete: " + j.artifactErr
 	}
 	return text, j.status, true
 }
@@ -778,6 +781,11 @@ func (m *Manager) SetActiveSessionPath(parentSession, sessionPath string) {
 
 	if oldDir != "" && newDir != "" && oldDir != newDir {
 		if err := migrateArtifactDir(oldDir, newDir); err != nil {
+			if adoptDefault {
+				m.mu.Lock()
+				m.adoptUnscopedJobsLocked(parentSession)
+				m.mu.Unlock()
+			}
 			m.recordArtifactMigrationError(parentSession, err)
 		} else {
 			m.mu.Lock()
@@ -806,6 +814,11 @@ func (m *Manager) adoptUnscopedJobsLocked(parentSession string) {
 	parentSession = strings.TrimSpace(parentSession)
 	if parentSession == "" {
 		return
+	}
+	for i := range m.completed {
+		if strings.TrimSpace(m.completed[i].sessionID) == "" {
+			m.completed[i].sessionID = parentSession
+		}
 	}
 	for oldKey, j := range m.jobs {
 		if j == nil || strings.TrimSpace(j.SessionID) != "" {
@@ -857,6 +870,9 @@ func (m *Manager) recordArtifactMigrationError(parentSession string, err error) 
 		if j.artifactErr == "" {
 			j.artifactErr = "migration: " + err.Error()
 			j.artifactComplete = false
+		}
+		if j.status == Done {
+			j.status = Failed
 		}
 		j.mu.Unlock()
 	}

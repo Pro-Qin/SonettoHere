@@ -151,6 +151,38 @@ func TestSetActiveSessionPathAdoptsUnscopedTemporaryJobs(t *testing.T) {
 	}
 }
 
+func TestSetActiveSessionPathAdoptsUnscopedJobsOnMigrationFailure(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(ArtifactDir(sessionPath), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(event.Discard)
+	defer m.Close()
+
+	j := m.StartForSession("", "task", "temporary", func(context.Context, io.Writer) (string, error) {
+		return "temporary answer", nil
+	})
+	<-j.done
+
+	m.SetActiveSessionPath("session", sessionPath)
+
+	out, status, ok := m.OutputForSession("session", j.ID)
+	if !ok || status != Failed {
+		t.Fatalf("scoped output ok/status = %v/%s, want true/failed", ok, status)
+	}
+	if !strings.Contains(out, "temporary answer") || !strings.Contains(out, "job artifact incomplete: migration:") {
+		t.Fatalf("scoped output = %q, want answer and migration error", out)
+	}
+	res := m.WaitForSession(context.Background(), "session", []string{j.ID}, 1)
+	if len(res) != 1 || !strings.Contains(res[0].Output, "job artifact incomplete: migration:") {
+		t.Fatalf("scoped wait = %+v, want migration error", res)
+	}
+	if note := m.DrainCompletedNoteForSession("session"); !strings.Contains(note, j.ID) {
+		t.Fatalf("adopted completion note = %q, want job id %s", note, j.ID)
+	}
+}
+
 func TestSetActiveSessionPathReportsMigrationFailure(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "session.jsonl")
