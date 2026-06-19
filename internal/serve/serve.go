@@ -27,6 +27,7 @@ import (
 	"reasonix/internal/jobs"
 	"reasonix/internal/nilutil"
 	"reasonix/internal/provider"
+	"reasonix/internal/tool"
 )
 
 //go:embed index.html
@@ -218,6 +219,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("GET /sessions", s.sessions)
 	mux.HandleFunc("GET /skills", s.skills)
+	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /delete-session", s.deleteSession)
 	return logMiddleware(csrfGuard(mux))
 }
@@ -1082,6 +1084,28 @@ func previewSessionFile(path string) (string, int) {
 		}
 	}
 	return first, turns
+}
+
+// health returns the system health status.
+func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+	toolNames := make([]string, 0)
+	for _, t := range tool.Builtins() {
+		toolNames = append(toolNames, t.Name())
+	}
+
+	_, err := config.Load()
+	configStatus := "ok"
+	if err != nil {
+		configStatus = "error: " + err.Error()
+	}
+
+	writeJSON(w, map[string]any{
+		"status":      "ok",
+		"version":     "1.0-sonettohere",
+		"tools_count": len(toolNames),
+		"tools":       toolNames,
+		"config":      configStatus,
+	})
 }
 
 // skills lists discoverable skills.

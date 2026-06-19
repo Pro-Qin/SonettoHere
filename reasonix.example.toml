@@ -120,6 +120,12 @@ effort         = "high"
 enabled = []   # empty = all built-in tools
 bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local cap
 
+# External API keys for built-in tools (set these as environment variables):
+#   UAPIS_API_KEY      — 天气、节假日、塔罗牌、答案之书等工具 (uapis.cn)
+#   AMAP_API_KEY       — 高德地图地理编码/周边搜索/路线规划 (restapi.amap.com)
+#   TODOIST_API_TOKEN  — Todoist 任务管理 (api.todoist.com)
+# These are optional — tools that depend on them gracefully fail when unset.
+
 [tools.background_jobs]
 stalled_warning_seconds = 900   # warn once per background job after this many quiet seconds; 0 disables
 
