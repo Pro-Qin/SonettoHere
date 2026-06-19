@@ -63,6 +63,27 @@
 - **Zero-friction distribution.** `CGO_ENABLED=0` single binary; cross-compile
   to six targets with one command. The only dependency is a TOML parser.
 
+<br/>
+
+> ### 🎆 SonettoHere Integration
+>
+> This fork ([**Pro-Qin/SonettoHere**](https://github.com/Pro-Qin/SonettoHere) `Nahida` branch) merges
+> [SonettoHere](https://github.com/Miso2233/SonettoHere)'s domain-specific tool ecosystem onto Reasonix's
+> Go-native architecture.
+>
+> **30+ built-in tools** — including:
+> - 🌤️ **Weather & Calendar** — `get_current_weather`, `holiday_calendar`
+> - 🗺️ **Map (Gaode AMAP)** — `geocode_address`, `regeocode`, `nearby_search`,
+>   `fuzzy_search_poi`, `get_transit_route`, `get_cycling_route`
+> - ✅ **Todoist Tasks** — `todoist_add`, `todoist_list_tasks`, `todoist_complete_task`,
+>   `todoist_delete_task`, `todoist_list_projects`
+> - 🎮 **Entertainment** — `tarot_reading`, `answer_book`
+> - ⏰ **System** — `current_time`
+> - ❤️ **Health** — `health_check`, `GET /health`
+>
+> API keys via environment: `UAPIS_API_KEY`, `AMAP_API_KEY`, `TODOIST_API_TOKEN`.
+> Upstream Reasonix: [esengine/DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix)
+
 ## Install
 
 ```sh

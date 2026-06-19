@@ -58,6 +58,26 @@
 - **插件驱动**：外部工具以子进程形式运行，通过 stdio JSON-RPC 通信（MCP 兼容）；
   内置工具在编译期自注册。
 - **零摩擦分发**：`CGO_ENABLED=0` 单二进制；一条命令交叉编译到六个目标平台。
+
+<br/>
+
+> ### 🎆 SonettoHere 集成
+>
+> 本分支 ([**Pro-Qin/SonettoHere**](https://github.com/Pro-Qin/SonettoHere) `Nahida`) 将
+> [SonettoHere](https://github.com/Miso2233/SonettoHere) 的领域工具生态融入到 Reasonix 的 Go 原生架构中。
+>
+> **30+ 内置工具** — 涵盖：
+> - 🌤️ **天气与日历** — `get_current_weather`、`holiday_calendar`
+> - 🗺️ **高德地图** — `geocode_address`、`regeocode`、`nearby_search`、
+>   `fuzzy_search_poi`、`get_transit_route`、`get_cycling_route`
+> - ✅ **Todoist 任务** — `todoist_add`、`todoist_list_tasks`、`todoist_complete_task`、
+>   `todoist_delete_task`、`todoist_list_projects`
+> - 🎮 **娱乐** — `tarot_reading`、`answer_book`
+> - ⏰ **系统** — `current_time`
+> - ❤️ **健康检查** — `health_check`、`GET /health`
+>
+> API Key 通过环境变量配置：`UAPIS_API_KEY`、`AMAP_API_KEY`、`TODOIST_API_TOKEN`。
+> 上游 Reasonix: [esengine/DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix)
   唯一依赖是一个 TOML 解析库。
 
 ## 安装
